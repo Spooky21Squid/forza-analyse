@@ -2,6 +2,9 @@ from PySide6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
 from PySide6.QtCore import Slot, QThread, QObject, Signal, Qt, QSize
 from PySide6.QtGui import QAction, QIcon, QKeySequence
 
+import pyqtgraph as pg
+import numpy as np
+
 from fdp import ForzaDataPacket
 
 import pathlib
@@ -94,15 +97,6 @@ class Session(QObject):
         self.updated.emit(updatedValues)
 
 
-class MyToolBar(QtWidgets.QToolBar):
-    """
-    The toolbar at the top of the application, holding the icons that perform functions like play, or change view
-    """
-
-    def __init__(self):
-        super().__init__()
-
-
 class VideoPlayer(QtWidgets.QWidget):
     """
     Displays the videos of the session to the user
@@ -145,6 +139,15 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.pause()
 
 
+class dataWidget(QtWidgets.QFrame):
+    """Displays useful information in table format about the session"""
+    pass
+
+
+def loadTelemetry(filePath: str):
+    """Opens the telemetry file generated from data out and returns it as a numpy array"""
+
+
 class MainWindow(QtWidgets.QMainWindow):
 
     # Maintains the state of a single session. Users can save this session to a file, or reset it.
@@ -155,7 +158,6 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
-        videoPath = parentDir / pathlib.Path("media") / pathlib.Path("example-forza-video.mp4")
 
         self.worker = None
         self.thread = None
@@ -171,7 +173,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Toolbar and Actions --------------------------
 
-        toolbar = MyToolBar()
+        toolbar = QtWidgets.QToolBar()
         toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
 
@@ -208,6 +210,18 @@ class MainWindow(QtWidgets.QMainWindow):
         actionsMenu = menu.addMenu("&Actions")
         actionsMenu.addAction(playPauseAction)
         actionsMenu.addAction(stopAction)
+
+        # Add the Dock widgets, eg. graph and data table ---------------------
+
+        self.plotWidget = pg.GraphicsLayoutWidget()
+        #self.graphWidget = pg.PlotWidget()
+
+        graphDockWidget = QtWidgets.QDockWidget("Telemetry Graphs", self)
+        graphDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        graphDockWidget.setWidget(self.plotWidget)
+        graphDockWidget.setStatusTip("Telemetry Graph: Displays the telemetry data from the session.")
+        self.addDockWidget(Qt.BottomDockWidgetArea, graphDockWidget)
+
     
     @Slot()
     def openVideo(self):
@@ -216,9 +230,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg.setWindowTitle("Open Video")
         dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
         dlg.setNameFilter("*.mp4")
-        
+
         if dlg.exec():
             fileNames = dlg.selectedFiles()
+            logging.info("Opened file: {}".format(fileNames[0]))
             self.videoPlayer.player.setSource(fileNames[0])
 
     @Slot()

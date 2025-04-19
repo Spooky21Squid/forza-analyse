@@ -167,7 +167,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.videoPlayer)
 
         # Hard codes a video file to TEST the video player
-        self.videoPlayer.player.setSource(str(videoPath))
+        #self.videoPlayer.player.setSource(str(videoPath))
 
         # Add the Toolbar and Actions --------------------------
 
@@ -192,12 +192,35 @@ class MainWindow(QtWidgets.QMainWindow):
         stopAction.triggered.connect(self.videoPlayer.player.stop)
         toolbar.addAction(stopAction)
 
-        # Add the menu bar and connect actions
+        # Action to open a video file
+        openVideoAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open", self)
+        openVideoAction.setShortcut(QKeySequence("Ctrl+O"))
+        openVideoAction.setStatusTip("Open File: Opens a video file to be analysed.")
+        openVideoAction.triggered.connect(self.openVideo)
+        toolbar.addAction(openVideoAction)
+
+        # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
+
+        fileMenu = menu.addMenu("&File")
+        fileMenu.addAction(openVideoAction)
+
         actionsMenu = menu.addMenu("&Actions")
         actionsMenu.addAction(playPauseAction)
         actionsMenu.addAction(stopAction)
     
+    @Slot()
+    def openVideo(self):
+        """Opens and loads a session video into the application"""
+        dlg = QtWidgets.QFileDialog(self)
+        dlg.setWindowTitle("Open Video")
+        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
+        dlg.setNameFilter("*.mp4")
+        
+        if dlg.exec():
+            fileNames = dlg.selectedFiles()
+            self.videoPlayer.player.setSource(fileNames[0])
+
     @Slot()
     def toggle_loop(self, checked):
         """

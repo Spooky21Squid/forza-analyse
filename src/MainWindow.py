@@ -114,7 +114,6 @@ class VideoPlayer(QtWidgets.QWidget):
         self.videoWidget = QtMultimediaWidgets.QVideoWidget()
 
         self.player.setVideoOutput(self.videoWidget)
-        self.player.seek
         
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)

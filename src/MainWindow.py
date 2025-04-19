@@ -14,6 +14,23 @@ import select
 import socket
 from enum import Enum
 
+"""
+Currently:
+- working on Session.update: Need to:
+    - Remove all the rows of data at the beginning of the data ndarray that have negative distance (all the data points
+    collected before the player has crossed the start line) (Do this when creating the ndarray from the csv file)
+    - Create a Lap object for each lap in the session that includes:
+        - Distance traveled
+        - Lap time
+        - best lap boolean (True if best lap)
+        - In lap boolean (if tyres change wear)
+        - Out lap boolean (if tyres change wear)
+        and more...
+- When session is updated, initialise the graph widget with a speed over distance graph
+"""
+
+
+
 class Worker(QObject):
     """
     Listens for incoming forza UDP packets and communicates to QWidgets when
@@ -55,16 +72,13 @@ class Worker(QObject):
         logging.info("Socket closed.")
         self.finished.emit()
 
-"""
-Introduced a session object to easily pass new data between to tabs without them doing their own calculations on it.
-Eg. this main window can pass session to dashboard, and to analytics separately so their only jobs are to display
-the data.
 
-Session will get a fdp and alter its own state to reflect the current state of the game.
+class Lap():
+    """Stores all the important collected and calculated data from a single lap"""
 
-Its state will comprise of the original fdp values, plus its own calculated values like fuel and interval.
-It will then update the updated values dictionary and emit that to widgets to display.
-"""
+    def __init__(self):
+        pass
+
 
 class Session(QObject):
     """
@@ -76,6 +90,7 @@ class Session(QObject):
     # Contains a dictionary of only the values that were updated. If a value stays the same between packets,
     # it will not be present.
     updated = Signal()
+    newLapIndexes = []  # Stores the first index of each new lap
 
     def __init__(self):
         super().__init__()
@@ -91,8 +106,20 @@ class Session(QObject):
         filePath : The path to the CSV telemetry file
         """
         self.data = np.genfromtxt(filePath, delimiter=",", names=True)
+        self.newLapIndexes.append(0)
 
-        # Update the session state and put any updated values in the dictionary here
+        # Update the newLapIndexes list and create new lap objects
+
+        """
+        currentLap = 0
+        currentIndex = 0
+        lapView = self.data['lap_no']
+        for x in np.nditer(lapView):
+            if x != currentLap:
+                self.newLapIndexes.append(i)
+                currentLap = lapView[i]
+        
+        """
         
         self.updated.emit()
         return True
@@ -140,11 +167,25 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.pause()
 
 
+class PlotWidget(pg.GraphicsLayoutWidget):
+    """Displays telemetry graphs in the upper or lower dock of the application"""
+
+    def __init__(self):
+        super().__init__()
+    
+    @Slot()
+    def newSession(self):
+        """Initialises the widget with a single graph of speed over distance of the fastest lap of the session"""
+        pass
+
+    def addNewGraph(self, yAxisLabel: str):
+        """Adds a new graph to the layout. The Y axis can be any parameter that is present in the Session object"""
+        pass
+
 class MainWindow(QtWidgets.QMainWindow):
 
     # Maintains the state of a single session. Users can save this session to a file, or reset it.
     session = Session()
-
 
     def __init__(self):
         super().__init__()
@@ -186,13 +227,6 @@ class MainWindow(QtWidgets.QMainWindow):
         stopAction.triggered.connect(self.videoPlayer.player.stop)
         toolbar.addAction(stopAction)
 
-        # Action to open a video file
-        #openVideoAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open", self)
-        #openVideoAction.setShortcut(QKeySequence("Ctrl+O"))
-        #openVideoAction.setStatusTip("Open File: Opens a video file to be analysed.")
-        #openVideoAction.triggered.connect(self.openVideo)
-        #toolbar.addAction(openVideoAction)
-
         # Action to open a new session, to load the telemetry csv file and the associated mp4 video with the same name
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
@@ -213,7 +247,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 
-        self.plotWidget = pg.GraphicsLayoutWidget()
+        self.plotWidget = PlotWidget()
         #self.graphWidget = pg.PlotWidget()
 
         graphDockWidget = QtWidgets.QDockWidget("Telemetry Graphs", self)
@@ -260,19 +294,6 @@ class MainWindow(QtWidgets.QMainWindow):
             
             self.videoPlayer.player.setSource(str(videoFilePath))
 
-    
-    @Slot()
-    def openVideo(self):
-        """Opens and loads a session video into the application"""
-        dlg = QtWidgets.QFileDialog(self)
-        dlg.setWindowTitle("Open Video")
-        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
-        dlg.setNameFilter("*.mp4")
-
-        if dlg.exec():
-            fileNames = dlg.selectedFiles()
-            logging.info("Opened file: {}".format(fileNames[0]))
-            self.videoPlayer.player.setSource(fileNames[0])
 
     @Slot()
     def toggle_loop(self, checked):

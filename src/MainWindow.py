@@ -68,33 +68,34 @@ It will then update the updated values dictionary and emit that to widgets to di
 
 class Session(QObject):
     """
-    Maintains the state of a session so individual widgets are not responsible for keeping it, just displaying
-    the data.
-    
-    A session represents a single unit of time's worth of continuously logged packets.
-
-    Each tab will rely on this object to provide them with up to date values from packets. When updated, it will
-    emit a signal to tell widgets to change their values.
+    Stores the telemetry data and associated calculated data for the currently opened session. A session
+    represents a single unit of time's worth of continuously logged packets saved as a csv file.
     """
 
     # Emitted when the session object is updated so widgets can display the latest values.
     # Contains a dictionary of only the values that were updated. If a value stays the same between packets,
     # it will not be present.
-    updated = Signal(dict)
+    updated = Signal()
 
     def __init__(self):
         super().__init__()
 
     @Slot()
-    def update(self, fdp: ForzaDataPacket):
+    def update(self, filePath: str) -> bool:
         """
-        Updates the state of the session using a new data packet.
+        Updates the currently opened session using a filepath to the csv telemetry file.
+        Returns True if the session was updated successfully, false otherwise.
+
+        Parameters
+        ----------
+        filePath : The path to the CSV telemetry file
         """
-        updatedValues = dict()
+        self.data = np.genfromtxt(filePath, delimiter=",", names=True)
 
         # Update the session state and put any updated values in the dictionary here
         
-        self.updated.emit(updatedValues)
+        self.updated.emit()
+        return True
 
 
 class VideoPlayer(QtWidgets.QWidget):
@@ -137,15 +138,6 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.play()
         else:
             self.player.pause()
-
-
-class dataWidget(QtWidgets.QFrame):
-    """Displays useful information in table format about the session"""
-    pass
-
-
-def loadTelemetry(filePath: str):
-    """Opens the telemetry file generated from data out and returns it as a numpy array"""
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -195,17 +187,25 @@ class MainWindow(QtWidgets.QMainWindow):
         toolbar.addAction(stopAction)
 
         # Action to open a video file
-        openVideoAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open", self)
-        openVideoAction.setShortcut(QKeySequence("Ctrl+O"))
-        openVideoAction.setStatusTip("Open File: Opens a video file to be analysed.")
-        openVideoAction.triggered.connect(self.openVideo)
-        toolbar.addAction(openVideoAction)
+        #openVideoAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open", self)
+        #openVideoAction.setShortcut(QKeySequence("Ctrl+O"))
+        #openVideoAction.setStatusTip("Open File: Opens a video file to be analysed.")
+        #openVideoAction.triggered.connect(self.openVideo)
+        #toolbar.addAction(openVideoAction)
+
+        # Action to open a new session, to load the telemetry csv file and the associated mp4 video with the same name
+        openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
+        openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
+        openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
+        openSessionAction.triggered.connect(self.openSession)
+        toolbar.addAction(openSessionAction)
 
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
         fileMenu = menu.addMenu("&File")
-        fileMenu.addAction(openVideoAction)
+        #fileMenu.addAction(openVideoAction)
+        fileMenu.addAction(openSessionAction)
 
         actionsMenu = menu.addMenu("&Actions")
         actionsMenu.addAction(playPauseAction)
@@ -221,6 +221,44 @@ class MainWindow(QtWidgets.QMainWindow):
         graphDockWidget.setWidget(self.plotWidget)
         graphDockWidget.setStatusTip("Telemetry Graph: Displays the telemetry data from the session.")
         self.addDockWidget(Qt.BottomDockWidgetArea, graphDockWidget)
+    
+
+    @Slot()
+    def openSession(self):
+        """Opens and loads the telemetry csv file and accompanying video footage (if there is any) into the application"""
+
+        # Dialog to get the csv file
+        dlg = QtWidgets.QFileDialog(self)
+        dlg.setWindowTitle("Open Session")
+        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
+        dlg.setNameFilter("*.csv")
+
+        # If user presses okay
+        if dlg.exec():
+            filePathList = dlg.selectedFiles()
+            logging.info("Opened file: {}".format(filePathList[0]))
+            if not self.session.update(filePathList[0]):  # Update the session with new file
+                # open dialog box telling user the csv file couldnt be loaded
+                dlg = QtWidgets.QMessageBox(self)
+                dlg.setWindowTitle("Telemetry file not loaded.")
+                dlg.setText('The file "{}" could not be loaded.'.format(filePathList[0]))
+                dlg.exec()
+                return
+
+            filePath = pathlib.Path(filePathList[0]).resolve()
+
+            # Try to find a video with the same file name in the same folder as the telemetry file and load it
+            videoFilePath = filePath.with_suffix(".mp4")
+
+            if not videoFilePath.exists():
+                # open dialog box telling user no video could be found
+                dlg = QtWidgets.QMessageBox(self)
+                dlg.setWindowTitle("Video file not loaded.")
+                dlg.setText('The video file "{}" could not be loaded.'.format(str(videoFilePath)))
+                dlg.exec()
+                return
+            
+            self.videoPlayer.player.setSource(str(videoFilePath))
 
     
     @Slot()

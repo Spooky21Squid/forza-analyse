@@ -112,7 +112,9 @@ class VideoPlayer(QtWidgets.QWidget):
         super().__init__()
         self.player = QtMultimedia.QMediaPlayer()
         self.videoWidget = QtMultimediaWidgets.QVideoWidget()
+
         self.player.setVideoOutput(self.videoWidget)
+        self.player.seek
         
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
@@ -185,10 +187,17 @@ class MainWindow(QtWidgets.QMainWindow):
         playPauseAction.triggered.connect(self.videoPlayer.playPause)
         toolbar.addAction(playPauseAction)
 
+        # Action to stop and skip to the beginning of the footage
+        stopAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-stop.png"))), "Stop", self)
+        stopAction.setStatusTip("Stop Button: Stops the footage and skips to the beginning.")
+        stopAction.triggered.connect(self.videoPlayer.player.stop)
+        toolbar.addAction(stopAction)
+
         # Add the menu bar and connect actions
         menu = self.menuBar()
         actionsMenu = menu.addMenu("&Actions")
         actionsMenu.addAction(playPauseAction)
+        actionsMenu.addAction(stopAction)
     
     @Slot()
     def toggle_loop(self, checked):

@@ -201,9 +201,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.videoPlayer = VideoPlayer()
         self.setCentralWidget(self.videoPlayer)
 
-        # Hard codes a video file to TEST the video player
-        #self.videoPlayer.player.setSource(str(videoPath))
-
         # Add the Toolbar and Actions --------------------------
 
         toolbar = QtWidgets.QToolBar()
@@ -234,16 +231,26 @@ class MainWindow(QtWidgets.QMainWindow):
         openSessionAction.triggered.connect(self.openSession)
         toolbar.addAction(openSessionAction)
 
+        # Action to start/stop recording a session (Record UDP data and a video input source)
+        recordSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Record Session", self)
+        recordSessionAction.setShortcut(QKeySequence("Ctrl+R"))
+        recordSessionAction.setCheckable(True)
+        recordSessionAction.setStatusTip("Record Session: Starts recording Forza data and an accompanying video source.")
+        #recordSessionAction.triggered.connect()
+        toolbar.addAction(recordSessionAction)
+
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
         fileMenu = menu.addMenu("&File")
-        #fileMenu.addAction(openVideoAction)
         fileMenu.addAction(openSessionAction)
 
         actionsMenu = menu.addMenu("&Actions")
         actionsMenu.addAction(playPauseAction)
         actionsMenu.addAction(stopAction)
+
+        recordMenu = menu.addMenu("&Record")
+        recordMenu.addAction(recordSessionAction)
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 

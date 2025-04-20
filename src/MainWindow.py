@@ -366,8 +366,10 @@ class MainWindow(QtWidgets.QMainWindow):
         graphDockWidget.setStatusTip("Telemetry Graph: Displays the telemetry data from the session.")
         self.addDockWidget(Qt.BottomDockWidgetArea, graphDockWidget)
 
-        # Add an action to the menu bar to open/close the graph dock widget
+        # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(graphDockWidget.toggleViewAction())
+        viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
+        viewMenu.addAction(recordConfigFormDockWidget.toggleViewAction())
     
 
     @Slot()

@@ -6,6 +6,7 @@ import socket
 import pathlib
 import yaml
 import logging
+import Utility
 
 """
 The main file to set up and run forza-analyse.
@@ -17,22 +18,6 @@ all config files are present and well-formed.
 """
 
 logging.basicConfig(level=logging.INFO)
-
-def getIP():
-    """Returns the local IP address as a string. If an error is encountered while trying to
-    establish a connection, it will return None."""
-
-    ip = None
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-            s.connect(("8.8.8.8", 1337))
-            ip = s.getsockname()[0]
-            s.close()
-    except:
-        return None
-    
-    return str(ip)
 
 def run(ip: str, dashConfig:dict, style:str):
     app = QtWidgets.QApplication(sys.argv)
@@ -52,7 +37,7 @@ def run(ip: str, dashConfig:dict, style:str):
     sys.exit(app.exec())
 
 if __name__ == "__main__":
-    ip = getIP()
+    ip = Utility.getIP()
     logging.info("IP Address: {}".format(ip))
 
     parentDir = pathlib.Path(__file__).parent.parent.resolve()

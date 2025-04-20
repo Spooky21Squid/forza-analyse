@@ -6,6 +6,7 @@ import pyqtgraph as pg
 import numpy as np
 
 from fdp import ForzaDataPacket
+import Utility
 
 import pathlib
 import yaml
@@ -78,6 +79,66 @@ class Lap():
 
     def __init__(self):
         pass
+
+
+class RecordConfig():
+    """Stores all the configuration settings for recording a session"""
+
+    def __init__(self):
+        self.port = 1337  # Port to listen to for Forza data
+
+        # All possible parameters sent by Forza data out in order
+        params = [
+            'is_race_on', 'timestamp_ms',
+            'engine_max_rpm', 'engine_idle_rpm', 'current_engine_rpm',
+            'acceleration_x', 'acceleration_y', 'acceleration_z',
+            'velocity_x', 'velocity_y', 'velocity_z',
+            'angular_velocity_x', 'angular_velocity_y', 'angular_velocity_z',
+            'yaw', 'pitch', 'roll',
+            'norm_suspension_travel_FL', 'norm_suspension_travel_FR',
+            'norm_suspension_travel_RL', 'norm_suspension_travel_RR',
+            'tire_slip_ratio_FL', 'tire_slip_ratio_FR',
+            'tire_slip_ratio_RL', 'tire_slip_ratio_RR',
+            'wheel_rotation_speed_FL', 'wheel_rotation_speed_FR',
+            'wheel_rotation_speed_RL', 'wheel_rotation_speed_RR',
+            'wheel_on_rumble_strip_FL', 'wheel_on_rumble_strip_FR',
+            'wheel_on_rumble_strip_RL', 'wheel_on_rumble_strip_RR',
+            'wheel_in_puddle_FL', 'wheel_in_puddle_FR',
+            'wheel_in_puddle_RL', 'wheel_in_puddle_RR',
+            'surface_rumble_FL', 'surface_rumble_FR',
+            'surface_rumble_RL', 'surface_rumble_RR',
+            'tire_slip_angle_FL', 'tire_slip_angle_FR',
+            'tire_slip_angle_RL', 'tire_slip_angle_RR',
+            'tire_combined_slip_FL', 'tire_combined_slip_FR',
+            'tire_combined_slip_RL', 'tire_combined_slip_RR',
+            'suspension_travel_meters_FL', 'suspension_travel_meters_FR',
+            'suspension_travel_meters_RL', 'suspension_travel_meters_RR',
+            'car_ordinal', 'car_class', 'car_performance_index',
+            'drivetrain_type', 'num_cylinders',
+            'position_x', 'position_y', 'position_z',
+            'speed', 'power', 'torque',
+            'tire_temp_FL', 'tire_temp_FR',
+            'tire_temp_RL', 'tire_temp_RR',
+            'boost', 'fuel', 'dist_traveled',
+            'best_lap_time', 'last_lap_time',
+            'cur_lap_time', 'cur_race_time',
+            'lap_no', 'race_pos',
+            'accel', 'brake', 'clutch', 'handbrake',
+            'gear', 'steer',
+            'norm_driving_line', 'norm_ai_brake_diff',
+            'tire_wear_FL', 'tire_wear_FR',
+            'tire_wear_RL', 'tire_wear_RR',
+            'track_ordinal'
+        ]
+
+        # Dict of the parameters the user has chosen to save to the csv telemetry file
+        # All params initialised to True
+        self.selectedParams = dict()
+        for param in params:
+            self.selectedParams[param] = True
+        
+        # IP address that Forza should send to - Can be None if IP address couldn't be received
+        self.ip = Utility.getIP()
 
 
 class Session(QObject):
@@ -167,6 +228,27 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.pause()
 
 
+class recordConfigForm(QtWidgets.QFormLayout):
+    """Form to adjust the settings for recording such as port number and which parameters to save"""
+    pass
+
+
+class RecordStatusWidget(QtWidgets.QFrame):
+    """Displays the current record config settings and status of the recording"""
+
+    def __init__(self, port: str, ip: str):
+        super().__init__()
+
+        layout = QtWidgets.QHBoxLayout()
+        currentPortLabel = QtWidgets.QLabel("Port: {}".format(port))
+        layout.addWidget(currentPortLabel)
+
+        ipLabel = QtWidgets.QLabel("IP: {}".format(ip))
+        layout.addWidget(ipLabel)
+
+        self.setLayout(layout)
+
+
 class PlotWidget(pg.GraphicsLayoutWidget):
     """Displays telemetry graphs in the upper or lower dock of the application"""
 
@@ -184,8 +266,11 @@ class PlotWidget(pg.GraphicsLayoutWidget):
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    # Maintains the state of a single session. Users can save this session to a file, or reset it.
+    # Stores recorded telemetry data
     session = Session()
+
+    # Stores all settings needed to record telemetry and video
+    recordConfig = RecordConfig()
 
     def __init__(self):
         super().__init__()
@@ -239,6 +324,14 @@ class MainWindow(QtWidgets.QMainWindow):
         #recordSessionAction.triggered.connect()
         toolbar.addAction(recordSessionAction)
 
+        # Action to change the port that the record action will listen to
+        changePortAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Record Session", self)
+        changePortAction.setShortcut(QKeySequence("Ctrl+R"))
+        changePortAction.setCheckable(True)
+        changePortAction.setStatusTip("Record Session: Starts recording Forza data and an accompanying video source.")
+        #changePortAction.triggered.connect()
+        toolbar.addAction(changePortAction)
+
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
@@ -252,7 +345,17 @@ class MainWindow(QtWidgets.QMainWindow):
         recordMenu = menu.addMenu("&Record")
         recordMenu.addAction(recordSessionAction)
 
+        # Contains actions to open/close the dock widgets
+        viewMenu = menu.addMenu("&View")
+
         # Add the Dock widgets, eg. graph and data table ---------------------
+
+        recordStatusWidget = RecordStatusWidget(self.recordConfig.port, self.recordConfig.ip)
+        recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
+        recordStatusDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        recordStatusDockWidget.setWidget(recordStatusWidget)
+        recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
+        self.addDockWidget(Qt.TopDockWidgetArea, recordStatusDockWidget)
 
         self.plotWidget = PlotWidget()
         #self.graphWidget = pg.PlotWidget()
@@ -262,6 +365,9 @@ class MainWindow(QtWidgets.QMainWindow):
         graphDockWidget.setWidget(self.plotWidget)
         graphDockWidget.setStatusTip("Telemetry Graph: Displays the telemetry data from the session.")
         self.addDockWidget(Qt.BottomDockWidgetArea, graphDockWidget)
+
+        # Add an action to the menu bar to open/close the graph dock widget
+        viewMenu.addAction(graphDockWidget.toggleViewAction())
     
 
     @Slot()

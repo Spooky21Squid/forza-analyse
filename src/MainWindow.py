@@ -87,55 +87,14 @@ class RecordConfig():
     def __init__(self):
         self.port = 1337  # Port to listen to for Forza data
 
-        # All possible parameters sent by Forza data out in order
-        params = [
-            'is_race_on', 'timestamp_ms',
-            'engine_max_rpm', 'engine_idle_rpm', 'current_engine_rpm',
-            'acceleration_x', 'acceleration_y', 'acceleration_z',
-            'velocity_x', 'velocity_y', 'velocity_z',
-            'angular_velocity_x', 'angular_velocity_y', 'angular_velocity_z',
-            'yaw', 'pitch', 'roll',
-            'norm_suspension_travel_FL', 'norm_suspension_travel_FR',
-            'norm_suspension_travel_RL', 'norm_suspension_travel_RR',
-            'tire_slip_ratio_FL', 'tire_slip_ratio_FR',
-            'tire_slip_ratio_RL', 'tire_slip_ratio_RR',
-            'wheel_rotation_speed_FL', 'wheel_rotation_speed_FR',
-            'wheel_rotation_speed_RL', 'wheel_rotation_speed_RR',
-            'wheel_on_rumble_strip_FL', 'wheel_on_rumble_strip_FR',
-            'wheel_on_rumble_strip_RL', 'wheel_on_rumble_strip_RR',
-            'wheel_in_puddle_FL', 'wheel_in_puddle_FR',
-            'wheel_in_puddle_RL', 'wheel_in_puddle_RR',
-            'surface_rumble_FL', 'surface_rumble_FR',
-            'surface_rumble_RL', 'surface_rumble_RR',
-            'tire_slip_angle_FL', 'tire_slip_angle_FR',
-            'tire_slip_angle_RL', 'tire_slip_angle_RR',
-            'tire_combined_slip_FL', 'tire_combined_slip_FR',
-            'tire_combined_slip_RL', 'tire_combined_slip_RR',
-            'suspension_travel_meters_FL', 'suspension_travel_meters_FR',
-            'suspension_travel_meters_RL', 'suspension_travel_meters_RR',
-            'car_ordinal', 'car_class', 'car_performance_index',
-            'drivetrain_type', 'num_cylinders',
-            'position_x', 'position_y', 'position_z',
-            'speed', 'power', 'torque',
-            'tire_temp_FL', 'tire_temp_FR',
-            'tire_temp_RL', 'tire_temp_RR',
-            'boost', 'fuel', 'dist_traveled',
-            'best_lap_time', 'last_lap_time',
-            'cur_lap_time', 'cur_race_time',
-            'lap_no', 'race_pos',
-            'accel', 'brake', 'clutch', 'handbrake',
-            'gear', 'steer',
-            'norm_driving_line', 'norm_ai_brake_diff',
-            'tire_wear_FL', 'tire_wear_FR',
-            'tire_wear_RL', 'tire_wear_RR',
-            'track_ordinal'
-        ]
-
         # Dict of the parameters the user has chosen to save to the csv telemetry file
         # All params initialised to True
         self.selectedParams = dict()
-        for param in params:
+        for param in Utility.ForzaSettings.params:
             self.selectedParams[param] = True
+        
+        # Overrides the selectedParams if True, and records all the parameters. If False, only selectedParams are recorded
+        self.allParams = True
         
         # IP address that Forza should send to - Can be None if IP address couldn't be received
         self.ip = Utility.getIP()
@@ -228,9 +187,34 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.pause()
 
 
-class recordConfigForm(QtWidgets.QFormLayout):
+class RecordConfigForm(QtWidgets.QWidget):
     """Form to adjust the settings for recording such as port number and which parameters to save"""
-    pass
+    
+    def __init__(self):
+        super().__init__()
+
+        #setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+
+        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535)
+        self.allParams = QtWidgets.QCheckBox()
+        self.allParams.setChecked(True)
+
+        # Dictionary of all paramaters and their checkboxes
+        paramDict = dict()
+        for param in Utility.ForzaSettings.params:
+            checkBox = QtWidgets.QCheckBox()
+            checkBox.setChecked(True)
+            paramDict[param] = checkBox
+
+        formLayout = QtWidgets.QFormLayout()
+        formLayout.addRow("Port", self.port)
+        formLayout.addRow("Record All", self.allParams)
+
+        # Add the checkbox for each parameter
+        for param, checkBox in paramDict.items():
+            formLayout.addRow(param, checkBox)
+
+        self.setLayout(formLayout)
 
 
 class RecordStatusWidget(QtWidgets.QFrame):
@@ -350,6 +334,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 
+        # Record settings form widget
+        recordConfigForm = RecordConfigForm()
+
+        scrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
+        scrollArea.setWidget(recordConfigForm)
+        scrollArea.setWidgetResizable(True)
+        scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        recordConfigFormDockWidget = QtWidgets.QDockWidget("Record Config Form", self)
+        recordConfigFormDockWidget.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        recordConfigFormDockWidget.setWidget(scrollArea)
+        recordConfigFormDockWidget.setStatusTip("Record Config Form: Change the telemetry and video recording settings.")
+        self.addDockWidget(Qt.RightDockWidgetArea, recordConfigFormDockWidget)
+
+        # Record status widget
         recordStatusWidget = RecordStatusWidget(self.recordConfig.port, self.recordConfig.ip)
         recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
         recordStatusDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
@@ -357,6 +356,7 @@ class MainWindow(QtWidgets.QMainWindow):
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
         self.addDockWidget(Qt.TopDockWidgetArea, recordStatusDockWidget)
 
+        # Graph widget
         self.plotWidget = PlotWidget()
         #self.graphWidget = pg.PlotWidget()
 

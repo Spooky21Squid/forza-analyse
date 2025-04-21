@@ -31,6 +31,48 @@ Currently:
 """
 
 
+class MultiPlotWidget(pg.GraphicsLayoutWidget):
+    """Displays multiple telemetry plots generated from the session telemetry data"""
+
+    def __init__(self, parent=None, show=False, size=None, title=None, **kargs):
+        super().__init__(parent, show, size, title, **kargs)
+
+        # Contains all the plots currently displayed in the layout
+        self.plots = dict()
+        self.data = None  # The numpy telemetry data
+    
+    @Slot()
+    def update(self, data: np.ndarray):
+        """Creates new plots from the new session telemetry data, but doesn't display them right away"""
+        self.data = data
+
+        
+        xAxis = data["dist_traveled"]
+
+        """
+        for param in data.dtype.names:
+            newPlot = self.addPlot(title=param)
+            yAxis = data[param]
+            newPlot.plot(xAxis, yAxis)
+            self.plots[param] = newPlot
+            self.nextRow()
+        """
+
+        self.addNewPlot("speed")
+        self.addNewPlot("steer")
+        
+    
+    @Slot()
+    def addNewPlot(self, param: str):
+        """Adds a new plot to the layout with the 'param' forza paramater as the y axis"""
+        
+        xAxis = self.data["dist_traveled"]
+        newPlot = self.addPlot(title=param)
+        yAxis = self.data[param]
+        newPlot.plot(xAxis, yAxis)
+        self.plots[param] = newPlot
+        self.nextRow()
+
 
 class Worker(QObject):
     """
@@ -124,26 +166,24 @@ class Session(QObject):
     represents a single unit of time's worth of continuously logged packets saved as a csv file.
     """
 
-    # Emitted when the session object is updated so widgets can display the latest values.
-    # Contains a dictionary of only the values that were updated. If a value stays the same between packets,
-    # it will not be present.
-    updated = Signal()
-    newLapIndexes = []  # Stores the first index of each new lap
+    # Emitted when the session object is updated so widgets can display the latest values from the numpy array
+    updated = Signal(np.ndarray)
 
     def __init__(self):
         super().__init__()
+        self.newLapIndexes = []  # Stores the first index of each new lap
 
     @Slot()
-    def update(self, filePath: str) -> bool:
+    def update(self, data: np.ndarray) -> bool:
         """
-        Updates the currently opened session using a filepath to the csv telemetry file.
+        Updates the currently opened session using a numpy array containing the udp data.
         Returns True if the session was updated successfully, false otherwise.
 
         Parameters
         ----------
-        filePath : The path to the CSV telemetry file
+        data : The telemetry data
         """
-        self.data = np.genfromtxt(filePath, delimiter=",", names=True)
+        self.data = data
         self.newLapIndexes.append(0)
 
         # Update the newLapIndexes list and create new lap objects
@@ -159,7 +199,8 @@ class Session(QObject):
         
         """
         
-        self.updated.emit()
+        self.updated.emit(self.data)
+        logging.info("Updated session telemetry data")
         return True
 
 
@@ -274,21 +315,6 @@ class RecordStatusWidget(QtWidgets.QFrame):
         self.currentPortLabel.setText("Port: {}".format(port))
 
 
-class PlotWidget(pg.GraphicsLayoutWidget):
-    """Displays telemetry graphs in the upper or lower dock of the application"""
-
-    def __init__(self):
-        super().__init__()
-    
-    @Slot()
-    def newSession(self):
-        """Initialises the widget with a single graph of speed over distance of the fastest lap of the session"""
-        pass
-
-    def addNewGraph(self, yAxisLabel: str):
-        """Adds a new graph to the layout. The Y axis can be any parameter that is present in the Session object"""
-        pass
-
 class MainWindow(QtWidgets.QMainWindow):
 
     # Stores recorded telemetry data
@@ -373,14 +399,14 @@ class MainWindow(QtWidgets.QMainWindow):
         recordConfigForm = RecordConfigForm()
         recordConfigForm.updated.connect(self.recordConfig.update)
 
-        scrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
-        scrollArea.setWidget(recordConfigForm)
-        scrollArea.setWidgetResizable(True)
-        scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        formScrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
+        formScrollArea.setWidget(recordConfigForm)
+        formScrollArea.setWidgetResizable(True)
+        formScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         recordConfigFormDockWidget = QtWidgets.QDockWidget("Record Config Form", self)
         recordConfigFormDockWidget.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        recordConfigFormDockWidget.setWidget(scrollArea)
+        recordConfigFormDockWidget.setWidget(formScrollArea)
         recordConfigFormDockWidget.setStatusTip("Record Config Form: Change the telemetry and video recording settings.")
         self.addDockWidget(Qt.RightDockWidgetArea, recordConfigFormDockWidget)
 
@@ -393,18 +419,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(Qt.TopDockWidgetArea, recordStatusDockWidget)
         self.recordConfig.updated.connect(recordStatusWidget.update)
 
-        # Graph widget
-        self.plotWidget = PlotWidget()
-        #self.graphWidget = pg.PlotWidget()
+        # plot widget
+        self.plotWidget = MultiPlotWidget()
+        self.session.updated.connect(self.plotWidget.update)
 
-        graphDockWidget = QtWidgets.QDockWidget("Telemetry Graphs", self)
-        graphDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
-        graphDockWidget.setWidget(self.plotWidget)
-        graphDockWidget.setStatusTip("Telemetry Graph: Displays the telemetry data from the session.")
-        self.addDockWidget(Qt.BottomDockWidgetArea, graphDockWidget)
+        plotScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
+        plotScrollArea.setWidget(self.plotWidget)
+        plotScrollArea.setWidgetResizable(True)
+        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
+        plotDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        plotDockWidget.setWidget(plotScrollArea)
+        plotDockWidget.setStatusTip("Telemetry plot: Displays the telemetry data from the session.")
+        self.addDockWidget(Qt.BottomDockWidgetArea, plotDockWidget)
 
         # Add an action to the menu bar to open/close the dock widgets
-        viewMenu.addAction(graphDockWidget.toggleViewAction())
+        viewMenu.addAction(plotDockWidget.toggleViewAction())
         viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
         viewMenu.addAction(recordConfigFormDockWidget.toggleViewAction())
     
@@ -423,7 +454,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if dlg.exec():
             filePathList = dlg.selectedFiles()
             logging.info("Opened file: {}".format(filePathList[0]))
-            if not self.session.update(filePathList[0]):  # Update the session with new file
+            data = np.genfromtxt(filePathList[0], delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
+            if not self.session.update(data):  # Update the session with new udp data
                 # open dialog box telling user the csv file couldnt be loaded
                 dlg = QtWidgets.QMessageBox(self)
                 dlg.setWindowTitle("Telemetry file not loaded.")
@@ -445,6 +477,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             
             self.videoPlayer.player.setSource(str(videoFilePath))
+            logging.info("Loaded video file")
 
     @Slot()
     def toggle_loop(self, checked):

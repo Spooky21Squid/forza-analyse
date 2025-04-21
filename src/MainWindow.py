@@ -81,10 +81,13 @@ class Lap():
         pass
 
 
-class RecordConfig():
+class RecordConfig(QObject):
     """Stores all the configuration settings for recording a session"""
 
+    updated = Signal(str)  # Emits a signal when the object is updated and sends the new port number as a string
+
     def __init__(self):
+        super().__init__()
         self.port = 1337  # Port to listen to for Forza data
 
         # Dict of the parameters the user has chosen to save to the csv telemetry file
@@ -98,6 +101,21 @@ class RecordConfig():
         
         # IP address that Forza should send to - Can be None if IP address couldn't be received
         self.ip = Utility.getIP()
+    
+    @Slot()
+    def update(self, port: str, allParams: bool, selectedParams: dict):
+        """Updates the config object"""
+        
+        self.port = port
+        self.allParams = allParams
+
+        if not allParams:
+            for param, selected in selectedParams.items():
+                self.selectedParams[param] = selected
+        
+        self.updated.emit(port)
+
+        logging.info("Updated record settings")
 
 
 class Session(QObject):
@@ -189,32 +207,50 @@ class VideoPlayer(QtWidgets.QWidget):
 
 class RecordConfigForm(QtWidgets.QWidget):
     """Form to adjust the settings for recording such as port number and which parameters to save"""
+
+    # Emitted when a user saves the form by pressing the save button, and sends the data
+    updated = Signal(str, bool, dict)
     
     def __init__(self):
         super().__init__()
 
-        #setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
-
-        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535)
+        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535, value=1337)
         self.allParams = QtWidgets.QCheckBox()
         self.allParams.setChecked(True)
 
         # Dictionary of all paramaters and their checkboxes
-        paramDict = dict()
+        self.paramDict = dict()
         for param in Utility.ForzaSettings.params:
             checkBox = QtWidgets.QCheckBox()
             checkBox.setChecked(True)
-            paramDict[param] = checkBox
+            self.paramDict[param] = checkBox
 
         formLayout = QtWidgets.QFormLayout()
         formLayout.addRow("Port", self.port)
         formLayout.addRow("Record All", self.allParams)
 
         # Add the checkbox for each parameter
-        for param, checkBox in paramDict.items():
+        for param, checkBox in self.paramDict.items():
             formLayout.addRow(param, checkBox)
 
-        self.setLayout(formLayout)
+        saveButton = QtWidgets.QPushButton("Save")
+        saveButton.clicked.connect(self.saved)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(saveButton)
+        layout.addLayout(formLayout)
+
+        self.setLayout(layout)
+    
+    @Slot()
+    def saved(self):
+        """Collects the form data to be saved and emits a signal containing the data"""
+
+        newParamDict = dict()
+        for param, checkBox in self.paramDict.items():
+            newParamDict[param] = checkBox.isChecked()
+
+        self.updated.emit(str(self.port.value()), self.allParams.isChecked(), newParamDict)
 
 
 class RecordStatusWidget(QtWidgets.QFrame):
@@ -224,13 +260,18 @@ class RecordStatusWidget(QtWidgets.QFrame):
         super().__init__()
 
         layout = QtWidgets.QHBoxLayout()
-        currentPortLabel = QtWidgets.QLabel("Port: {}".format(port))
-        layout.addWidget(currentPortLabel)
+        self.currentPortLabel = QtWidgets.QLabel("Port: {}".format(port))
+        layout.addWidget(self.currentPortLabel)
 
-        ipLabel = QtWidgets.QLabel("IP: {}".format(ip))
-        layout.addWidget(ipLabel)
+        self.ipLabel = QtWidgets.QLabel("IP: {}".format(ip))
+        layout.addWidget(self.ipLabel)
 
         self.setLayout(layout)
+    
+    @Slot()
+    def update(self, port: str):
+        """Updates the widget with new record settings"""
+        self.currentPortLabel.setText("Port: {}".format(port))
 
 
 class PlotWidget(pg.GraphicsLayoutWidget):
@@ -266,6 +307,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.dashConfig = dict()
         self.ip = ""
+
+        # Central widget ----------------------
 
         self.videoPlayer = VideoPlayer()
         self.setCentralWidget(self.videoPlayer)
@@ -308,14 +351,6 @@ class MainWindow(QtWidgets.QMainWindow):
         #recordSessionAction.triggered.connect()
         toolbar.addAction(recordSessionAction)
 
-        # Action to change the port that the record action will listen to
-        changePortAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Record Session", self)
-        changePortAction.setShortcut(QKeySequence("Ctrl+R"))
-        changePortAction.setCheckable(True)
-        changePortAction.setStatusTip("Record Session: Starts recording Forza data and an accompanying video source.")
-        #changePortAction.triggered.connect()
-        toolbar.addAction(changePortAction)
-
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
@@ -336,6 +371,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Record settings form widget
         recordConfigForm = RecordConfigForm()
+        recordConfigForm.updated.connect(self.recordConfig.update)
 
         scrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
         scrollArea.setWidget(recordConfigForm)
@@ -355,6 +391,7 @@ class MainWindow(QtWidgets.QMainWindow):
         recordStatusDockWidget.setWidget(recordStatusWidget)
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
         self.addDockWidget(Qt.TopDockWidgetArea, recordStatusDockWidget)
+        self.recordConfig.updated.connect(recordStatusWidget.update)
 
         # Graph widget
         self.plotWidget = PlotWidget()
@@ -408,7 +445,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 return
             
             self.videoPlayer.player.setSource(str(videoFilePath))
-
 
     @Slot()
     def toggle_loop(self, checked):

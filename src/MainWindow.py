@@ -46,31 +46,28 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         """Creates new plots from the new session telemetry data, but doesn't display them right away"""
         self.data = data
 
-        
-        xAxis = data["dist_traveled"]
-
-        """
-        for param in data.dtype.names:
-            newPlot = self.addPlot(title=param)
-            yAxis = data[param]
-            newPlot.plot(xAxis, yAxis)
-            self.plots[param] = newPlot
-            self.nextRow()
-        """
-
-        self.addNewPlot("speed")
-        self.addNewPlot("steer")
+        self.addNewPlot("dist_traveled", "speed")
+        self.addNewPlot("dist_traveled", "steer")
         
     
     @Slot()
-    def addNewPlot(self, param: str):
-        """Adds a new plot to the layout with the 'param' forza paramater as the y axis"""
+    def addNewPlot(self, x: str, y: str):
+        """
+        Adds a new plot to the layout
         
-        xAxis = self.data["dist_traveled"]
-        newPlot = self.addPlot(title=param)
-        yAxis = self.data[param]
+        Parameters
+        ----------
+        x : The parameter to assign to the x axis, eg. dist_traveled
+        y : The parameter to assign to the y axis, eg. speed
+        """
+        
+        xAxis = self.data[x]
+        newPlot = self.addPlot(title=y)
+        newPlot.setMinimumHeight(300)
+        logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
+        yAxis = self.data[y]
         newPlot.plot(xAxis, yAxis)
-        self.plots[param] = newPlot
+        self.plots[y] = newPlot
         self.nextRow()
 
 
@@ -426,7 +423,7 @@ class MainWindow(QtWidgets.QMainWindow):
         plotScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
         plotScrollArea.setWidget(self.plotWidget)
         plotScrollArea.setWidgetResizable(True)
-        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
 
         plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
         plotDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)

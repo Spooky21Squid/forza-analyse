@@ -1,6 +1,6 @@
 import sys
-from PySide6 import QtWidgets, QtGui
-from PySide6.QtCore import Qt
+from PyQt6 import QtWidgets, QtGui
+from PyQt6.QtCore import Qt
 from MainWindow import MainWindow
 import socket
 import pathlib

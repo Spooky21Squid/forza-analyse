@@ -1,10 +1,12 @@
-from PySide6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
-from PySide6.QtCore import Slot, QThread, QObject, Signal, Qt, QSize
-from PySide6.QtGui import QAction, QIcon, QKeySequence
-from PySide6.QtMultimedia import QMediaDevices
+from PyQt6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
+from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
+from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtMultimedia import QMediaDevices
 
 import pyqtgraph as pg
 import numpy as np
+
+#import cv2
 
 from fdp import ForzaDataPacket
 import Utility
@@ -42,7 +44,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.plots = dict()
         self.data = None  # The numpy telemetry data
     
-    @Slot()
+    @pyqtSlot(np.ndarray)
     def update(self, data: np.ndarray):
         """Creates new plots from the new session telemetry data, but doesn't display them right away"""
         self.data = data
@@ -52,7 +54,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.addNewPlot("dist_traveled", "steer")
         
     
-    @Slot()
+    @pyqtSlot()
     def addNewPlot(self, x: str, y: str):
         """
         Adds a new plot to the layout
@@ -78,10 +80,10 @@ class Worker(QObject):
     Listens for incoming forza UDP packets and communicates to QWidgets when
     a packet is collected
     """
-    finished = Signal()
-    collected = Signal(bytes)
+    finished = pyqtSignal()
+    collected = pyqtSignal(bytes)
 
-    @Slot()
+    @pyqtSlot()
     def __init__(self, port:int):
         super(Worker, self).__init__()
         self.working = True
@@ -127,11 +129,10 @@ class Lap():
         self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
 
 
-
 class RecordConfig(QObject):
     """Stores all the configuration settings for recording a session"""
 
-    updated = Signal(str)  # Emits a signal when the object is updated and sends the new port number as a string
+    updated = pyqtSignal(str)  # Emits a signal when the object is updated and sends the new port number as a string
 
     def __init__(self):
         super().__init__()
@@ -149,7 +150,7 @@ class RecordConfig(QObject):
         # IP address that Forza should send to - Can be None if IP address couldn't be received
         self.ip = Utility.getIP()
     
-    @Slot()
+    @pyqtSlot(str, bool, dict)
     def update(self, port: str, allParams: bool, selectedParams: dict):
         """Updates the config object"""
         
@@ -172,13 +173,13 @@ class Session(QObject):
     """
 
     # Emitted when the session object is updated so widgets can display the latest values from the numpy array
-    updated = Signal(np.ndarray)
+    updated = pyqtSignal(np.ndarray)
 
     def __init__(self):
         super().__init__()
         #self.newLapIndexes = []  # Stores the first index of each new lap
 
-    @Slot()
+    @pyqtSlot()
     def update(self, data: np.ndarray) -> bool:
         """
         Updates the currently opened session using a numpy array containing the udp data.
@@ -238,7 +239,7 @@ class VideoPlayer(QtWidgets.QWidget):
         self.player.setSource(filePath)
     
 
-    @Slot()
+    @pyqtSlot(bool)
     def playPause(self, play: bool):
         """Toggles the video playback"""
         if play:
@@ -251,7 +252,7 @@ class RecordConfigForm(QtWidgets.QWidget):
     """Form to adjust the settings for recording such as port number and which parameters to save"""
 
     # Emitted when a user saves the form by pressing the save button, and sends the data
-    updated = Signal(str, bool, dict)
+    updated = pyqtSignal(str, bool, dict)
     
     def __init__(self):
         super().__init__()
@@ -284,7 +285,7 @@ class RecordConfigForm(QtWidgets.QWidget):
 
         self.setLayout(layout)
     
-    @Slot()
+    @pyqtSlot()
     def saved(self):
         """Collects the form data to be saved and emits a signal containing the data"""
 
@@ -310,7 +311,7 @@ class RecordStatusWidget(QtWidgets.QFrame):
 
         self.setLayout(layout)
     
-    @Slot()
+    @pyqtSlot(str)
     def update(self, port: str):
         """Updates the widget with new record settings"""
         self.currentPortLabel.setText("Port: {}".format(port))
@@ -327,7 +328,7 @@ class RecordDialog(QtWidgets.QDialog):
         self.setWindowTitle("Configure Record Settings")
 
         # Define the buttons at the bottom and connect them to the dialog
-        buttons = (QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons = (QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
         self.buttonBox = (QtWidgets.QDialogButtonBox(buttons))
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
@@ -335,11 +336,11 @@ class RecordDialog(QtWidgets.QDialog):
         inputs = QMediaDevices.videoInputs()
         logging.info("Inputs: {}".format(len(inputs)))
         for device in inputs:
-            layout.addWidget(QtWidgets.QLabel("Device {}: {}".format(device.id, device.description)))
+            layout.addWidget(QtWidgets.QLabel("Device {}: {}".format(device.id(), device.description())))
 
-        #label = QtWidgets.QLabel("Record settings go here")
+        label = QtWidgets.QLabel("Default Video Input: {}".format(QMediaDevices.defaultVideoInput().description()))
 
-        #layout.addWidget(label)
+        layout.addWidget(label)
         layout.addWidget(self.buttonBox)
         self.setLayout(layout)
 
@@ -438,21 +439,21 @@ class MainWindow(QtWidgets.QMainWindow):
         formScrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
         formScrollArea.setWidget(recordConfigForm)
         formScrollArea.setWidgetResizable(True)
-        formScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        formScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         recordConfigFormDockWidget = QtWidgets.QDockWidget("Record Config Form", self)
-        recordConfigFormDockWidget.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        recordConfigFormDockWidget.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         recordConfigFormDockWidget.setWidget(formScrollArea)
         recordConfigFormDockWidget.setStatusTip("Record Config Form: Change the telemetry and video recording settings.")
-        self.addDockWidget(Qt.RightDockWidgetArea, recordConfigFormDockWidget)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, recordConfigFormDockWidget)
 
         # Record status widget
         recordStatusWidget = RecordStatusWidget(self.recordConfig.port, self.recordConfig.ip)
         recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
-        recordStatusDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        recordStatusDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
         recordStatusDockWidget.setWidget(recordStatusWidget)
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
-        self.addDockWidget(Qt.TopDockWidgetArea, recordStatusDockWidget)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
         self.recordConfig.updated.connect(recordStatusWidget.update)
 
         # plot widget
@@ -462,20 +463,20 @@ class MainWindow(QtWidgets.QMainWindow):
         plotScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
         plotScrollArea.setWidget(self.plotWidget)
         plotScrollArea.setWidgetResizable(True)
-        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
         plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
-        plotDockWidget.setAllowedAreas(Qt.TopDockWidgetArea | Qt.BottomDockWidgetArea)
+        plotDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
         plotDockWidget.setWidget(plotScrollArea)
         plotDockWidget.setStatusTip("Telemetry plot: Displays the telemetry data from the session.")
-        self.addDockWidget(Qt.BottomDockWidgetArea, plotDockWidget)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, plotDockWidget)
 
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
         viewMenu.addAction(recordConfigFormDockWidget.toggleViewAction())
     
-    @Slot()
+    @pyqtSlot()
     def configureRecord(self):
         """Action to open and set the record settings"""
 
@@ -486,14 +487,14 @@ class MainWindow(QtWidgets.QMainWindow):
             logging.info("Record settings could not be changed")
     
 
-    @Slot()
+    @pyqtSlot()
     def openSession(self):
         """Opens and loads the telemetry csv file and accompanying video footage (if there is any) into the application"""
 
         # Dialog to get the csv file
         dlg = QtWidgets.QFileDialog(self)
         dlg.setWindowTitle("Open Session")
-        dlg.setFileMode(QtWidgets.QFileDialog.ExistingFile)
+        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
         dlg.setNameFilter("*.csv")
 
         # If user presses okay
@@ -522,10 +523,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 dlg.exec()
                 return
             
-            self.videoPlayer.player.setSource(str(videoFilePath))
+            self.videoPlayer.player.setSource(QUrl.fromLocalFile(str(videoFilePath)))
             logging.info("Loaded video file")
 
-    @Slot()
+    @pyqtSlot()
     def toggle_loop(self, checked):
         """
         Starts/stops listening for Forza UDP packets

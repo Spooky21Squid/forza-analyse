@@ -1,6 +1,7 @@
 from PySide6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
 from PySide6.QtCore import Slot, QThread, QObject, Signal, Qt, QSize
 from PySide6.QtGui import QAction, QIcon, QKeySequence
+from PySide6.QtMultimedia import QMediaDevices
 
 import pyqtgraph as pg
 import numpy as np
@@ -315,6 +316,34 @@ class RecordStatusWidget(QtWidgets.QFrame):
         self.currentPortLabel.setText("Port: {}".format(port))
 
 
+class RecordDialog(QtWidgets.QDialog):
+    """Dialog that helps the user configure some settings to record telemetry and a video source"""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        layout = QtWidgets.QVBoxLayout()
+
+        self.setWindowTitle("Configure Record Settings")
+
+        # Define the buttons at the bottom and connect them to the dialog
+        buttons = (QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        self.buttonBox = (QtWidgets.QDialogButtonBox(buttons))
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+
+        inputs = QMediaDevices.videoInputs()
+        logging.info("Inputs: {}".format(len(inputs)))
+        for device in inputs:
+            layout.addWidget(QtWidgets.QLabel("Device {}: {}".format(device.id, device.description)))
+
+        #label = QtWidgets.QLabel("Record settings go here")
+
+        #layout.addWidget(label)
+        layout.addWidget(self.buttonBox)
+        self.setLayout(layout)
+
+
 class MainWindow(QtWidgets.QMainWindow):
 
     # Stores recorded telemetry data
@@ -377,6 +406,13 @@ class MainWindow(QtWidgets.QMainWindow):
         #recordSessionAction.triggered.connect()
         toolbar.addAction(recordSessionAction)
 
+        # Action to change the record condig settings
+        recordConfigAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Record Config", self)
+        recordConfigAction.setShortcut(QKeySequence("Ctrl+S"))
+        recordConfigAction.setStatusTip("Record Config: Change the telemetry and video recording settings.")
+        recordConfigAction.triggered.connect(self.configureRecord)
+        toolbar.addAction(recordConfigAction)
+
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
@@ -438,6 +474,16 @@ class MainWindow(QtWidgets.QMainWindow):
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
         viewMenu.addAction(recordConfigFormDockWidget.toggleViewAction())
+    
+    @Slot()
+    def configureRecord(self):
+        """Action to open and set the record settings"""
+
+        dlg = RecordDialog(parent=self)
+        if dlg.exec():
+            logging.info("Record settings changed successfully")
+        else:
+            logging.info("Record settings could not be changed")
     
 
     @Slot()

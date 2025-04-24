@@ -46,6 +46,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         """Creates new plots from the new session telemetry data, but doesn't display them right away"""
         self.data = data
 
+        self.addNewPlot("time", "cur_lap_time")
         self.addNewPlot("dist_traveled", "speed")
         self.addNewPlot("dist_traveled", "steer")
         
@@ -117,7 +118,13 @@ class Lap():
     """Stores all the important collected and calculated data from a single lap"""
 
     def __init__(self):
-        pass
+        self.lapNumber: int = None
+        self.fastest: bool = None
+        self.inLap: bool = None
+        self.outLap: bool = None
+        self.lapTime: int = None  # In seconds
+        self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
+
 
 
 class RecordConfig(QObject):
@@ -168,7 +175,7 @@ class Session(QObject):
 
     def __init__(self):
         super().__init__()
-        self.newLapIndexes = []  # Stores the first index of each new lap
+        #self.newLapIndexes = []  # Stores the first index of each new lap
 
     @Slot()
     def update(self, data: np.ndarray) -> bool:
@@ -181,20 +188,16 @@ class Session(QObject):
         data : The telemetry data
         """
         self.data = data
-        self.newLapIndexes.append(0)
 
-        # Update the newLapIndexes list and create new lap objects
+        # Get the best lap time
+        masked = np.ma.masked_equal(data["best_lap_time"], 0, copy=False)  # Mask out the rows where best lap time is 0
+        bestLapTime = masked.min()
+        logging.info("Best lap time: {}".format(bestLapTime))
 
-        """
-        currentLap = 0
-        currentIndex = 0
-        lapView = self.data['lap_no']
-        for x in np.nditer(lapView):
-            if x != currentLap:
-                self.newLapIndexes.append(i)
-                currentLap = lapView[i]
-        
-        """
+        # ---------------
+        # Group the records by lap, then just use the last record in each group to get lap time, dist etc
+        # Can pre-define sectors for each lap based on distance (recorded by forza), then get the cur lap time at that distance
+        # ---------------
         
         self.updated.emit(self.data)
         logging.info("Updated session telemetry data")

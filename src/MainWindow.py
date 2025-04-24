@@ -1,7 +1,8 @@
 from PyQt6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
-from PyQt6.QtMultimedia import QMediaDevices
+from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession
+from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 import pyqtgraph as pg
 import numpy as np
@@ -214,7 +215,7 @@ class VideoPlayer(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
         self.player = QtMultimedia.QMediaPlayer()
-        self.videoWidget = QtMultimediaWidgets.QVideoWidget()
+        self.videoWidget = QVideoWidget()
 
         self.player.setVideoOutput(self.videoWidget)
         
@@ -325,6 +326,53 @@ class RecordDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout()
 
+        scrollArea = QtWidgets.QScrollArea()
+        scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        formWidget = QtWidgets.QWidget()
+        scrollArea.setWidget(formWidget)
+        scrollArea.setWidgetResizable(True)
+        formLayout = QtWidgets.QFormLayout()  # For the port, video source, widgets etc
+        formWidget.setLayout(formLayout)
+
+        # Add the view finder / camera preview
+        self.mediaPlayer = QtMultimedia.QMediaPlayer()
+        self.camera = QCamera()
+        self.camera.errorOccurred.connect(self.logCameraError)
+        self.captureSession = QMediaCaptureSession()
+        self.captureSession.setCamera(self.camera)
+        self.viewfinder = QVideoWidget()
+        self.captureSession.setVideoOutput(self.viewfinder)
+        layout.addWidget(self.viewfinder)
+
+        # Set the form layout ---------------------
+
+        # Search for the video input devices (eg. elgato), user can select it, and will get a preview in the dialog box
+        cameraInputs = QMediaDevices.videoInputs()
+        self.videoInputBox = QtWidgets.QComboBox()
+        self.videoInputBox.addItems(camera.description() for camera in cameraInputs)
+        self.videoInputBox.currentTextChanged.connect(self.setViewFinder)
+        formLayout.addRow("Video Input", self.videoInputBox)
+
+        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535, value=1337)
+        formLayout.addRow("Port", self.port)
+
+        # Check box to record all parameters
+        self.allParams = QtWidgets.QCheckBox()
+        self.allParams.setChecked(True)
+        self.allParams.checkStateChanged.connect(self.disableEnableParameters)
+        formLayout.addRow("Record All", self.allParams)
+
+        # Dictionary of all paramaters and their checkboxes so user can choose parameters
+        self.paramDict = dict()
+        for param in Utility.ForzaSettings.params:
+            checkBox = QtWidgets.QCheckBox()
+            checkBox.setChecked(True)
+            self.paramDict[param] = checkBox
+
+        # Add a checkbox for each parameter
+        for param, checkBox in self.paramDict.items():
+            formLayout.addRow(param, checkBox)
+
         self.setWindowTitle("Configure Record Settings")
 
         # Define the buttons at the bottom and connect them to the dialog
@@ -333,16 +381,39 @@ class RecordDialog(QtWidgets.QDialog):
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
 
-        inputs = QMediaDevices.videoInputs()
-        logging.info("Inputs: {}".format(len(inputs)))
-        for device in inputs:
-            layout.addWidget(QtWidgets.QLabel("Device {}: {}".format(device.id(), device.description())))
+        layout.addWidget(scrollArea)
 
-        label = QtWidgets.QLabel("Default Video Input: {}".format(QMediaDevices.defaultVideoInput().description()))
-
-        layout.addWidget(label)
         layout.addWidget(self.buttonBox)
         self.setLayout(layout)
+    
+    @pyqtSlot(str)
+    def setViewFinder(self, cameraDescription: str):
+        """Sets the viewfinder to a new camera input"""
+
+        self.camera.stop()
+        cameraInputs = QMediaDevices.videoInputs()
+        for c in cameraInputs:
+            if cameraDescription == c.description():
+                self.camera.setCameraDevice(c)
+                break
+        #self.captureSession.setCamera(self.camera)
+        self.camera.start()
+        logging.info("Camera: {} is active: {}".format(self.camera.cameraDevice().description(), self.camera.isActive()))
+    
+    @pyqtSlot(QCamera.Error, str)
+    def logCameraError(self, error: QCamera.Error, errorStr: str):
+        """Logs the error from the camera"""
+        logging.error("Error from camera: {}".format(errorStr))
+    
+    @pyqtSlot(Qt.CheckState)
+    def disableEnableParameters(self, checked: Qt.CheckState):
+        """Enable or disable the checkboxes for individual parameters"""
+        
+        for param, checkBox in self.paramDict.items():
+            if checked is Qt.CheckState.Checked:
+                checkBox.setEnabled(True)
+            else:
+                checkBox.setEnabled(False)
 
 
 class MainWindow(QtWidgets.QMainWindow):

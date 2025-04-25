@@ -7,8 +7,6 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
 import numpy as np
 
-#import cv2
-
 from fdp import ForzaDataPacket
 import Utility
 
@@ -249,54 +247,6 @@ class VideoPlayer(QtWidgets.QWidget):
             self.player.pause()
 
 
-class RecordConfigForm(QtWidgets.QWidget):
-    """Form to adjust the settings for recording such as port number and which parameters to save"""
-
-    # Emitted when a user saves the form by pressing the save button, and sends the data
-    updated = pyqtSignal(str, bool, dict)
-    
-    def __init__(self):
-        super().__init__()
-
-        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535, value=1337)
-        self.allParams = QtWidgets.QCheckBox()
-        self.allParams.setChecked(True)
-
-        # Dictionary of all paramaters and their checkboxes
-        self.paramDict = dict()
-        for param in Utility.ForzaSettings.params:
-            checkBox = QtWidgets.QCheckBox()
-            checkBox.setChecked(True)
-            self.paramDict[param] = checkBox
-
-        formLayout = QtWidgets.QFormLayout()
-        formLayout.addRow("Port", self.port)
-        formLayout.addRow("Record All", self.allParams)
-
-        # Add the checkbox for each parameter
-        for param, checkBox in self.paramDict.items():
-            formLayout.addRow(param, checkBox)
-
-        saveButton = QtWidgets.QPushButton("Save")
-        saveButton.clicked.connect(self.saved)
-
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(saveButton)
-        layout.addLayout(formLayout)
-
-        self.setLayout(layout)
-    
-    @pyqtSlot()
-    def saved(self):
-        """Collects the form data to be saved and emits a signal containing the data"""
-
-        newParamDict = dict()
-        for param, checkBox in self.paramDict.items():
-            newParamDict[param] = checkBox.isChecked()
-
-        self.updated.emit(str(self.port.value()), self.allParams.isChecked(), newParamDict)
-
-
 class RecordStatusWidget(QtWidgets.QFrame):
     """Displays the current record config settings and status of the recording"""
 
@@ -503,21 +453,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 
-        # Record settings form widget
-        recordConfigForm = RecordConfigForm()
-        recordConfigForm.updated.connect(self.recordConfig.update)
-
-        formScrollArea = QtWidgets.QScrollArea()  # Put the form in this to make it scrollable
-        formScrollArea.setWidget(recordConfigForm)
-        formScrollArea.setWidgetResizable(True)
-        formScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        recordConfigFormDockWidget = QtWidgets.QDockWidget("Record Config Form", self)
-        recordConfigFormDockWidget.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        recordConfigFormDockWidget.setWidget(formScrollArea)
-        recordConfigFormDockWidget.setStatusTip("Record Config Form: Change the telemetry and video recording settings.")
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, recordConfigFormDockWidget)
-
         # Record status widget
         recordStatusWidget = RecordStatusWidget(self.recordConfig.port, self.recordConfig.ip)
         recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
@@ -545,7 +480,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
-        viewMenu.addAction(recordConfigFormDockWidget.toggleViewAction())
     
     @pyqtSlot()
     def configureRecord(self):

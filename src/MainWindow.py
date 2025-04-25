@@ -1,7 +1,7 @@
 from PyQt6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
-from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession
+from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 import pyqtgraph as pg
@@ -131,7 +131,7 @@ class Lap():
 class RecordConfig(QObject):
     """Stores all the configuration settings for recording a session"""
 
-    updated = pyqtSignal(str)  # Emits a signal when the object is updated and sends the new port number as a string
+    statusUpdate = pyqtSignal(str, str)  # Emits a signal when the object is updated and sends the new port number as a string
 
     def __init__(self):
         super().__init__()
@@ -148,19 +148,28 @@ class RecordConfig(QObject):
         
         # IP address that Forza should send to - Can be None if IP address couldn't be received
         self.ip = Utility.getIP()
-    
-    @pyqtSlot(str, bool, dict)
-    def update(self, port: str, allParams: bool, selectedParams: dict):
-        """Updates the config object"""
-        
-        self.port = port
-        self.allParams = allParams
 
-        if not allParams:
-            for param, selected in selectedParams.items():
-                self.selectedParams[param] = selected
+        # The camera settings to find the source of the recording
+        self.cameraDevice: QCameraDevice = None
+    
+    #@pyqtSlot(str, bool, dict, QCameraDevice)
+    def update(self, port: str = None, allParams: bool = None, selectedParams: dict = None, cameraDevice: QCameraDevice = None):
+        """Updates the config object"""
+        if port:
+            self.port = port
         
-        self.updated.emit(port)
+        if allParams:
+            self.allParams = allParams
+
+        if not allParams and allParams is not None:
+            if selectedParams:
+                for param, selected in selectedParams.items():
+                    self.selectedParams[param] = selected
+        
+        if cameraDevice:
+            self.cameraDevice = cameraDevice
+        
+        self.statusUpdate.emit(self.port, self.cameraDevice.description() if self.cameraDevice else "")
 
         logging.info("Updated record settings")
 
@@ -250,7 +259,7 @@ class VideoPlayer(QtWidgets.QWidget):
 class RecordStatusWidget(QtWidgets.QFrame):
     """Displays the current record config settings and status of the recording"""
 
-    def __init__(self, port: str, ip: str):
+    def __init__(self, port: str, ip: str, camera: str = None):
         super().__init__()
 
         layout = QtWidgets.QHBoxLayout()
@@ -260,12 +269,16 @@ class RecordStatusWidget(QtWidgets.QFrame):
         self.ipLabel = QtWidgets.QLabel("IP: {}".format(ip))
         layout.addWidget(self.ipLabel)
 
+        self.cameraLabel = QtWidgets.QLabel("Camera: {}".format(camera))
+        layout.addWidget(self.cameraLabel)
+
         self.setLayout(layout)
     
-    @pyqtSlot(str)
-    def update(self, port: str):
+    #@pyqtSlot(str)
+    def update(self, port: str, camera: str):
         """Updates the widget with new record settings"""
         self.currentPortLabel.setText("Port: {}".format(port))
+        self.cameraLabel.setText("Camera: {}".format(camera))
 
 
 class RecordDialog(QtWidgets.QDialog):
@@ -460,7 +473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         recordStatusDockWidget.setWidget(recordStatusWidget)
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
-        self.recordConfig.updated.connect(recordStatusWidget.update)
+        self.recordConfig.statusUpdate.connect(recordStatusWidget.update)
 
         # plot widget
         self.plotWidget = MultiPlotWidget()

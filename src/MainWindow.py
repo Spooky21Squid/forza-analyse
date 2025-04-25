@@ -1,7 +1,7 @@
 from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
-from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice
+from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 import pyqtgraph as pg
@@ -128,8 +128,8 @@ class Lap():
         self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
 
 
-class RecordConfig(QObject):
-    """Stores all the configuration settings for recording a session"""
+class Record(QObject):
+    """Controls the recording of video and telemetry for a new session"""
 
     statusUpdate = pyqtSignal(str, str)  # Emits a signal when the object is updated and sends the new port number as a string
 
@@ -149,11 +149,36 @@ class RecordConfig(QObject):
         # IP address that Forza should send to - Can be None if IP address couldn't be received
         self.ip = Utility.getIP()
 
+        # Whether the user wants to record video as well as telemetry (initialise to false as there are no initial camera devices)
+        self.recordVideo = False
+
         # The camera settings to find the source of the recording
         self.cameraDevice: QCameraDevice = None
+
+        # The chosen camera format
+        self.cameraFormat: QCameraFormat = None
+
+        # The file paths that the video and telemetry file should save to
+        self.videoFilePath: pathlib.Path = None
+        self.telemetryFilePath: pathlib.Path = None
     
+    def ready(self) -> bool:
+        """Returns True if the object is ready to record telemetry and video. False if not"""
+        pass
+    
+    def startRecording(self):
+        """Starts recording telemetry and video"""
+        
+        if not self.ready():
+            return  # Maybe put a dialog here to tell user not ready to record and why
+
+    def stopRecording(self):
+        """Stops recording video and telemetry and saves the results"""
+        pass
+
     #@pyqtSlot(str, bool, dict, QCameraDevice)
-    def update(self, port: str = None, allParams: bool = None, selectedParams: dict = None, cameraDevice: QCameraDevice = None):
+    def update(self, port: str = None, allParams: bool = None, selectedParams: dict = None,
+               recordVideo: bool = None, cameraDevice: QCameraDevice = None, cameraFormat: QCameraFormat = None):
         """Updates the config object"""
         if port:
             self.port = port
@@ -169,7 +194,13 @@ class RecordConfig(QObject):
         if cameraDevice:
             self.cameraDevice = cameraDevice
         
-        self.statusUpdate.emit(self.port, self.cameraDevice.description() if self.cameraDevice else "")
+        if cameraDevice and cameraFormat:
+            self.cameraFormat = cameraFormat
+        
+        if recordVideo is not None:
+            self.recordVideo = recordVideo
+        
+        self.statusUpdate.emit(str(self.port), self.cameraDevice.description() if self.cameraDevice else "None")
 
         logging.info("Updated record settings")
 
@@ -281,8 +312,38 @@ class RecordStatusWidget(QtWidgets.QFrame):
         self.cameraLabel.setText("Camera: {}".format(camera))
 
 
+class CameraPreview(QObject):
+    """A preview of the current chosen camera"""
+    def __init__(self, parent = None):
+        super().__init__(parent)
+
+        self.videoWidget = QVideoWidget()
+        self.videoWidget.setMinimumHeight(300)
+        self.camera = QCamera()
+
+        self.mediaCaptureSession = QMediaCaptureSession()
+        self.mediaCaptureSession.setCamera(self.camera)
+        self.mediaCaptureSession.setVideoOutput(self.videoWidget)
+    
+    def changeCameraFormat(self, index: int):
+        """Changes the camera format when given its index"""
+        formats = self.camera.cameraDevice().videoFormats()
+        if index < len(formats):
+            self.camera.setCameraFormat(formats[index])
+            logging.info("Changed camera format")
+    
+    def changeCameraDevice(self, cameraDescription: str):
+        """Changes the chosen camera device given its description"""
+        for camera in QMediaDevices.videoInputs():
+            if cameraDescription == camera.description():
+                self.camera.setCameraDevice(camera)
+                self.camera.start()
+
+
 class RecordDialog(QtWidgets.QDialog):
     """Dialog that helps the user configure some settings to record telemetry and a video source"""
+
+    save = pyqtSignal(int, bool, dict, bool, object, object)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -290,18 +351,10 @@ class RecordDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout()
 
         # Add a camera preview -----------
+        self.cameraPreview = CameraPreview()
         self.availableCameras = QMediaDevices.videoInputs()
-        self.currentCamera = self.availableCameras[0]
 
-        self.cameraPreviewWidget = QVideoWidget()
-        self.cameraPreviewWidget.setMinimumHeight(300)
-        self.cameraPreview = QCamera(self.currentCamera)
-        self.cameraPreview.start()
-        self.mediaCaptureSession = QMediaCaptureSession()
-        self.mediaCaptureSession.setCamera(self.cameraPreview)
-        self.mediaCaptureSession.setVideoOutput(self.cameraPreviewWidget)
-
-        layout.addWidget(self.cameraPreviewWidget)
+        layout.addWidget(self.cameraPreview.videoWidget)
 
         # layout for the form widget
         scrollArea = QtWidgets.QScrollArea()
@@ -312,17 +365,26 @@ class RecordDialog(QtWidgets.QDialog):
         formLayout = QtWidgets.QFormLayout()  # For the port, video source, widgets etc
         formWidget.setLayout(formLayout)
 
-        # Search for the video input devices (eg. elgato), user can select it, and will get a preview in the dialog box
+        # Check box for recording video or not - also disables or enables the video input boxes
+        self.recordVideo = QtWidgets.QCheckBox()
+        self.recordVideo.setChecked(True)
+        self.recordVideo.checkStateChanged.connect(self.disableEnableVideo)
+        formLayout.addRow("Record Video", self.recordVideo)
+
         self.videoInputBox = QtWidgets.QComboBox()
-        self.videoInputBox.addItems(camera.description() for camera in self.availableCameras)
-        self.videoInputBox.currentTextChanged.connect(self.changeCamera)
+        self.videoInputBox.setPlaceholderText("No video input selected")
+        self.videoInputBox.currentTextChanged.connect(self.cameraPreview.changeCameraDevice)
+        self.videoInputBox.currentTextChanged.connect(self.updateCameraFormatBox)
         formLayout.addRow("Video Input", self.videoInputBox)
 
-        # User can select a camera format to use
         self.cameraFormatBox = QtWidgets.QComboBox()
-        self.cameraFormatBox.addItems(Utility.QCameraFormatToStr(format) for format in self.currentCamera.videoFormats())
-        self.cameraFormatBox.currentIndexChanged.connect(self.changeCameraFormat)
+        self.cameraFormatBox.setPlaceholderText("No video format selected")
+        self.cameraFormatBox.currentIndexChanged.connect(self.cameraPreview.changeCameraFormat)
         formLayout.addRow("Camera Format", self.cameraFormatBox)
+
+        # Populate the video input box only if there are available cameras
+        if len(self.availableCameras) != 0:
+            self.videoInputBox.addItems(camera.description() for camera in self.availableCameras)
 
         self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535, value=1337)
         formLayout.addRow("Port", self.port)
@@ -350,6 +412,7 @@ class RecordDialog(QtWidgets.QDialog):
         buttons = (QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
         self.buttonBox = (QtWidgets.QDialogButtonBox(buttons))
         self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.accepted.connect(self.collectAndSave)
         self.buttonBox.rejected.connect(self.reject)
 
         layout.addWidget(scrollArea)
@@ -357,19 +420,47 @@ class RecordDialog(QtWidgets.QDialog):
         layout.addWidget(self.buttonBox)
         self.setLayout(layout)
     
-    def changeCameraFormat(self, formatIndex: int):
-        """Changes the camera format"""
-        newFormat = self.currentCamera.videoFormats()[formatIndex]
-        self.cameraPreview.setCameraFormat(newFormat)
+    def collectAndSave(self):
+        """Collect all the chosen settings and emit a save signal"""
+
+        port = self.port.value()
+        allParams = self.allParams.isChecked()
+        selectedParams = dict()
+        if not allParams:
+            for param, checkBox in self.paramDict.items():
+                selectedParams[param] = checkBox.isChecked()
+        recordVideo = self.recordVideo.isChecked()
+
+        cameraDevice = None
+        cameraFormat = None
+        if recordVideo:  # don't bother changing the video/format settings if the user isn't going to record them
+            for cd in QMediaDevices.videoInputs():
+                if self.videoInputBox.currentText() == cd.description():
+                    cameraDevice = cd
+            if cameraDevice is not None:
+                cameraFormat = cameraDevice.videoFormats()[self.cameraFormatBox.currentIndex()]
+        
+        self.save.emit(port, allParams, selectedParams, recordVideo, cameraDevice, cameraFormat)
     
-    def changeCamera(self, cameraDescription: str):
-        """Changes the chosen camera and camera preview"""
-        for camera in self.availableCameras:
+    def updateCameraFormatBox(self, cameraDescription: str):
+        """Updates the video format box given the description of the camera device"""
+
+        self.cameraFormatBox.clear()
+
+        for camera in QMediaDevices.videoInputs():
             if cameraDescription == camera.description():
-                self.cameraPreview.setCameraDevice(camera)
-                self.currentCamera = camera
-                self.cameraFormatBox.clear()
                 self.cameraFormatBox.addItems(Utility.QCameraFormatToStr(format) for format in camera.videoFormats())
+                self.cameraFormatBox.setCurrentIndex(0)
+    
+    def disableEnableVideo(self, checked: Qt.CheckState):
+        """Enable or disable the video and video format input boxes"""
+
+        if checked is Qt.CheckState.Checked:
+            self.videoInputBox.setEnabled(True)
+            self.cameraFormatBox.setEnabled(True)
+        else:
+            self.videoInputBox.setEnabled(False)
+            self.cameraFormatBox.setEnabled(False)
     
     @pyqtSlot(Qt.CheckState)
     def disableEnableParameters(self, checked: Qt.CheckState):
@@ -384,11 +475,11 @@ class RecordDialog(QtWidgets.QDialog):
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    # Stores recorded telemetry data
+    # Stores previously recorded telemetry data
     session = Session()
 
     # Stores all settings needed to record telemetry and video
-    recordConfig = RecordConfig()
+    record = Record()
 
     def __init__(self):
         super().__init__()
@@ -470,13 +561,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add the Dock widgets, eg. graph and data table ---------------------
 
         # Record status widget
-        recordStatusWidget = RecordStatusWidget(self.recordConfig.port, self.recordConfig.ip)
+        recordStatusWidget = RecordStatusWidget(self.record.port, self.record.ip)
         recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
         recordStatusDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
         recordStatusDockWidget.setWidget(recordStatusWidget)
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
-        self.recordConfig.statusUpdate.connect(recordStatusWidget.update)
+        self.record.statusUpdate.connect(recordStatusWidget.update)
 
         # plot widget
         self.plotWidget = MultiPlotWidget()
@@ -499,14 +590,32 @@ class MainWindow(QtWidgets.QMainWindow):
     
     @pyqtSlot()
     def configureRecord(self):
-        """Action to open and set the record settings"""
+        """Opens a RecordDialog dialog box to update the record settings (port, camera etc) and save
+        them to the Record object"""
 
         dlg = RecordDialog(parent=self)
-        if dlg.exec():
+        dlg.save.connect(self.record.update)
+        if dlg.exec():  # If the user presses OK to save their settings
+            """ MOVED TO DIALOG ITSELF
+            port = dlg.port.value()
+            allParams = dlg.allParams.isChecked()
+            selectedParams = dict()
+            if not allParams:
+                for param, checkBox in dlg.paramDict.items():
+                    selectedParams[param] = checkBox.isChecked()
+            recordVideo = dlg.recordVideo.isChecked()
+
+            cameraDevice = None
+            cameraFormat = None
+            if recordVideo:  # don't bother changing the video/format settings if the user isn't going to record them
+                for cd in QMediaDevices.videoInputs():
+                    if dlg.videoInputBox.currentText() == cd.description():
+                        cameraDevice = cd
+                cameraFormat = cameraDevice.videoFormats()[dlg.cameraFormatBox.currentIndex()]
+            """
             logging.info("Record settings changed successfully")
         else:
             logging.info("Record settings could not be changed")
-    
 
     @pyqtSlot()
     def openSession(self):
@@ -531,9 +640,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 dlg.exec()
                 return
 
-            filePath = pathlib.Path(filePathList[0]).resolve()
-
             # Try to find a video with the same file name in the same folder as the telemetry file and load it
+            filePath = pathlib.Path(filePathList[0]).resolve()
             videoFilePath = filePath.with_suffix(".mp4")
 
             if not videoFilePath.exists():

@@ -1,4 +1,4 @@
-from PyQt6 import QtWidgets, QtMultimediaWidgets, QtMultimedia
+from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice

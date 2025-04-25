@@ -1,5 +1,6 @@
 # A collection of utility functions
 
+from PyQt6.QtMultimedia import QCameraFormat
 import socket
 
 def getIP():
@@ -64,3 +65,18 @@ class ForzaSettings():
         'tire_wear_RL', 'tire_wear_RR',
         'track_ordinal'
     ]
+
+def QCameraFormatToStr(format: QCameraFormat):
+    """Turns qcameraformat into a readable string"""
+
+    frameRate = ""
+    if format.minFrameRate() == format.maxFrameRate():
+        frameRate = format.minFrameRate()
+    else:
+        frameRate = "{}-{}".format(format.minFrameRate(), format.maxFrameRate())
+
+    result = "Resolution: {}x{}, Pixel Format: {}, Frame Rate: {}".format(
+        format.resolution().width(), format.resolution().height(),
+        format.pixelFormat().name,
+        frameRate)
+    return result

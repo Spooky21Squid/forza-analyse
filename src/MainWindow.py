@@ -10,6 +10,7 @@ import numpy as np
 from fdp import ForzaDataPacket
 import Utility
 
+from time import sleep
 import pathlib
 import yaml
 import logging
@@ -33,15 +34,18 @@ Currently:
 """
 
 
-class MultiPlotWidget(pg.GraphicsLayoutWidget):
+class MultiPlotWidget(QtWidgets.QWidget):
     """Displays multiple telemetry plots generated from the session telemetry data"""
 
-    def __init__(self, parent=None, show=False, size=None, title=None, **kargs):
-        super().__init__(parent, show, size, title, **kargs)
+    def __init__(self):
+        super().__init__()
 
         # Contains all the plots currently displayed in the layout
         self.plots = dict()
         self.data = None  # The numpy telemetry data
+
+        self.lt = QtWidgets.QVBoxLayout()
+        self.setLayout(self.lt)
     
     @pyqtSlot(np.ndarray)
     def update(self, data: np.ndarray):
@@ -65,144 +69,18 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         """
         
         xAxis = self.data[x]
-        newPlot = self.addPlot(title=y)
+        newPlot = pg.plot(title = y)
+        #newPlot = self.addPlot(title=y)
         newPlot.setMinimumHeight(300)
         logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
         yAxis = self.data[y]
         newPlot.plot(xAxis, yAxis)
+
+        vLine = pg.InfiniteLine(angle=90, movable=False)  # Player head
+        newPlot.addItem(vLine, ignoreBounds = True)
+
         self.plots[y] = newPlot
-        self.nextRow()
-
-
-class Worker(QObject):
-    """
-    Listens for incoming forza UDP packets and communicates to QWidgets when
-    a packet is collected
-    """
-    finished = pyqtSignal()
-    collected = pyqtSignal(bytes)
-
-    @pyqtSlot()
-    def __init__(self, port:int):
-        super(Worker, self).__init__()
-        self.working = True
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.setblocking(0)  # Set to non blocking, so the thread can be terminated without the socket blocking forever
-        self.socketTimeout = 1
-        self.port = port
-
-    def work(self):
-        """Binds the socket and starts listening for packets"""
-        self.sock.bind(('', self.port))
-        logging.info("Started listening on port {}".format(self.port))
-
-        while self.working:
-            try:
-                ready = select.select([self.sock], [], [], self.socketTimeout)
-                if ready[0]:
-                    data, address = self.sock.recvfrom(1024)
-                    logging.debug('received {} bytes from {}'.format(len(data), address))
-                    self.collected.emit(data)
-                else:
-                    logging.debug("Socket timeout")
-            except BlockingIOError:
-                logging.info("Could not listen to {}, trying again...".format(address))
-        
-        # Close the socket after the player wants to stop listening, so that
-        # a new socket can be created using the same port next time
-        #self.sock.shutdown(socket.SHUT_RDWR)
-        self.sock.close()
-        logging.info("Socket closed.")
-        self.finished.emit()
-
-
-class Lap():
-    """Stores all the important collected and calculated data from a single lap"""
-
-    def __init__(self):
-        self.lapNumber: int = None
-        self.fastest: bool = None
-        self.inLap: bool = None
-        self.outLap: bool = None
-        self.lapTime: int = None  # In seconds
-        self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
-
-
-class Record(QObject):
-    """Controls the recording of video and telemetry for a new session"""
-
-    statusUpdate = pyqtSignal(str, str)  # Emits a signal when the object is updated and sends the new port number as a string
-
-    def __init__(self):
-        super().__init__()
-        self.port = 1337  # Port to listen to for Forza data
-
-        # Dict of the parameters the user has chosen to save to the csv telemetry file
-        # All params initialised to True
-        self.selectedParams = dict()
-        for param in Utility.ForzaSettings.params:
-            self.selectedParams[param] = True
-        
-        # Overrides the selectedParams if True, and records all the parameters. If False, only selectedParams are recorded
-        self.allParams = True
-        
-        # IP address that Forza should send to - Can be None if IP address couldn't be received
-        self.ip = Utility.getIP()
-
-        # Whether the user wants to record video as well as telemetry (initialise to false as there are no initial camera devices)
-        self.recordVideo = False
-
-        # The camera settings to find the source of the recording
-        self.cameraDevice: QCameraDevice = None
-
-        # The chosen camera format
-        self.cameraFormat: QCameraFormat = None
-
-        # The file paths that the video and telemetry file should save to
-        self.videoFilePath: pathlib.Path = None
-        self.telemetryFilePath: pathlib.Path = None
-    
-    def ready(self) -> bool:
-        """Returns True if the object is ready to record telemetry and video. False if not"""
-        pass
-    
-    def startRecording(self):
-        """Starts recording telemetry and video"""
-        
-        if not self.ready():
-            return  # Maybe put a dialog here to tell user not ready to record and why
-
-    def stopRecording(self):
-        """Stops recording video and telemetry and saves the results"""
-        pass
-
-    #@pyqtSlot(str, bool, dict, QCameraDevice)
-    def update(self, port: str = None, allParams: bool = None, selectedParams: dict = None,
-               recordVideo: bool = None, cameraDevice: QCameraDevice = None, cameraFormat: QCameraFormat = None):
-        """Updates the config object"""
-        if port:
-            self.port = port
-        
-        if allParams:
-            self.allParams = allParams
-
-        if not allParams and allParams is not None:
-            if selectedParams:
-                for param, selected in selectedParams.items():
-                    self.selectedParams[param] = selected
-        
-        if cameraDevice:
-            self.cameraDevice = cameraDevice
-        
-        if cameraDevice and cameraFormat:
-            self.cameraFormat = cameraFormat
-        
-        if recordVideo is not None:
-            self.recordVideo = recordVideo
-        
-        self.statusUpdate.emit(str(self.port), self.cameraDevice.description() if self.cameraDevice else "None")
-
-        logging.info("Updated record settings")
+        self.lt.addWidget(newPlot)
 
 
 class Session(QObject):
@@ -245,25 +123,96 @@ class Session(QObject):
         return True
 
 
+class LapViewer(QtWidgets.QWidget):
+    """Displays a single video widget to the user starting at a specified point in the video, eg. the start of a lap."""
+
+    class State(Enum):
+        UNINITIALISED = 0
+        INITIALISED = 1
+
+    def __init__(self, source: str = None, position: int = 0):
+        super().__init__()
+        self.mediaPlayer = QtMultimedia.QMediaPlayer()
+        self.videoWidget = QVideoWidget()
+        self.mediaPlayer.setVideoOutput(self.videoWidget)
+        self.state = self.State.UNINITIALISED
+
+        # The position the playback should start at, given as milliseconds since the beginning of the video.
+        # Eg. if position = 0, the playback starts from the very beginning of the video.
+        self.startingPosition = position
+
+        self.mediaPlayer.setSource(source)
+
+        # Set the position only when the video has buffered, otherwise it won't set position
+        self.mediaPlayer.mediaStatusChanged.connect(self._positionSettable)
+        
+        lt = QtWidgets.QVBoxLayout()
+        self.setLayout(lt)
+        lt.addWidget(self.videoWidget)
+    
+    def _positionSettable(self, mediaStatus: QtMultimedia.QMediaPlayer.MediaStatus):
+        """Sets the position when the player has buffered media"""
+        if mediaStatus is QtMultimedia.QMediaPlayer.MediaStatus.BufferedMedia and self.state is self.State.UNINITIALISED:
+            self.mediaPlayer.setPosition(self.startingPosition)
+            self.state = self.State.INITIALISED
+            logging.info("Set position to {}".format(self.mediaPlayer.position()))
+    
+    def stop(self):
+        """Stops the playback and resets the position to the given starting position"""
+        self.mediaPlayer.stop()
+        self.mediaPlayer.setPosition(self.startingPosition)
+    
+    def pause(self):
+        """Pauses the playback at the current position"""
+
+        # If the video has reached the end, pausing it will reset to the beginning. This disables that, so the user can
+        # watch the rest of the other laps uninterrupted.
+        if self.mediaPlayer.mediaStatus() is not QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
+            self.mediaPlayer.pause()
+    
+    def play(self):
+        """Starts playing the video at its current position"""
+
+        if self.mediaPlayer.mediaStatus() is not QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
+            logging.info("Playing...")
+            self.mediaPlayer.play()
+
+
 class VideoPlayer(QtWidgets.QWidget):
     """
-    Displays the videos of the session to the user
+    Displays the videos of the session to the user. Can display multiple different laps side by side.
     """
 
     def __init__(self):
         super().__init__()
-        self.player = QtMultimedia.QMediaPlayer()
-        self.videoWidget = QVideoWidget()
-
-        self.player.setVideoOutput(self.videoWidget)
         
-        layout = QtWidgets.QVBoxLayout()
-        self.setLayout(layout)
-        layout.addWidget(self.videoWidget)
+        # A list of the different laps displayed as LapViewer widgets
+        self.lapViewers = list()
+
+        # The file path to the session's video
+        self.source = None
+        
+        self.lt = QtWidgets.QHBoxLayout()
+        self.setLayout(self.lt)
 
         self.setStatusTip("Video player: Plays footage from your session.")
     
+    def addViewer(self, position: int = 0):
+        """
+        Adds a new viewer into the widget, starting at the given point in the video.
 
+        Parameters
+        ----------
+        position : The position that the video should start at, given as milliseconds since the beginning of the video.
+        """
+
+        if self.source is None:
+            return
+        
+        newLap = LapViewer(self.source, position)
+        self.lapViewers.append(newLap)
+        self.lt.addWidget(newLap)
+    
     def setSource(self, filePath: str):
         """
         Sets a new video source for the player.
@@ -275,16 +224,21 @@ class VideoPlayer(QtWidgets.QWidget):
         """
 
         # Do some error checking here. If file doesn't exist or is in the wront format, tell user
-        self.player.setSource(filePath)
+        self.source = filePath
     
-
-    @pyqtSlot(bool)
+    def stop(self):
+        """Stops the lap viewers and resets them to their given start positions"""
+        for viewer in self.lapViewers:
+            viewer.stop()
+    
     def playPause(self, play: bool):
         """Toggles the video playback"""
         if play:
-            self.player.play()
+            for viewer in self.lapViewers:
+                viewer.play()
         else:
-            self.player.pause()
+            for viewer in self.lapViewers:
+                viewer.pause()
 
 
 class RecordStatusWidget(QtWidgets.QFrame):
@@ -312,185 +266,15 @@ class RecordStatusWidget(QtWidgets.QFrame):
         self.cameraLabel.setText("Camera: {}".format(camera))
 
 
-class CameraPreview(QObject):
-    """A preview of the current chosen camera"""
-    def __init__(self, parent = None):
-        super().__init__(parent)
-
-        self.videoWidget = QVideoWidget()
-        self.videoWidget.setMinimumHeight(300)
-        self.camera = QCamera()
-
-        self.mediaCaptureSession = QMediaCaptureSession()
-        self.mediaCaptureSession.setCamera(self.camera)
-        self.mediaCaptureSession.setVideoOutput(self.videoWidget)
-    
-    def changeCameraFormat(self, index: int):
-        """Changes the camera format when given its index"""
-        formats = self.camera.cameraDevice().videoFormats()
-        if index < len(formats):
-            self.camera.setCameraFormat(formats[index])
-            logging.info("Changed camera format")
-    
-    def changeCameraDevice(self, cameraDescription: str):
-        """Changes the chosen camera device given its description"""
-        for camera in QMediaDevices.videoInputs():
-            if cameraDescription == camera.description():
-                self.camera.setCameraDevice(camera)
-                self.camera.start()
-
-
-class RecordDialog(QtWidgets.QDialog):
-    """Dialog that helps the user configure some settings to record telemetry and a video source"""
-
-    save = pyqtSignal(int, bool, dict, bool, object, object)
-
-    def __init__(self, parent):
-        super().__init__(parent)
-
-        layout = QtWidgets.QVBoxLayout()
-
-        # Add a camera preview -----------
-        self.cameraPreview = CameraPreview()
-        self.availableCameras = QMediaDevices.videoInputs()
-
-        layout.addWidget(self.cameraPreview.videoWidget)
-
-        # layout for the form widget
-        scrollArea = QtWidgets.QScrollArea()
-        scrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        formWidget = QtWidgets.QWidget()
-        scrollArea.setWidget(formWidget)
-        scrollArea.setWidgetResizable(True)
-        formLayout = QtWidgets.QFormLayout()  # For the port, video source, widgets etc
-        formWidget.setLayout(formLayout)
-
-        # Check box for recording video or not - also disables or enables the video input boxes
-        self.recordVideo = QtWidgets.QCheckBox()
-        self.recordVideo.setChecked(True)
-        self.recordVideo.checkStateChanged.connect(self.disableEnableVideo)
-        formLayout.addRow("Record Video", self.recordVideo)
-
-        self.videoInputBox = QtWidgets.QComboBox()
-        self.videoInputBox.setPlaceholderText("No video input selected")
-        self.videoInputBox.currentTextChanged.connect(self.cameraPreview.changeCameraDevice)
-        self.videoInputBox.currentTextChanged.connect(self.updateCameraFormatBox)
-        formLayout.addRow("Video Input", self.videoInputBox)
-
-        self.cameraFormatBox = QtWidgets.QComboBox()
-        self.cameraFormatBox.setPlaceholderText("No video format selected")
-        self.cameraFormatBox.currentIndexChanged.connect(self.cameraPreview.changeCameraFormat)
-        formLayout.addRow("Camera Format", self.cameraFormatBox)
-
-        # Populate the video input box only if there are available cameras
-        if len(self.availableCameras) != 0:
-            self.videoInputBox.addItems(camera.description() for camera in self.availableCameras)
-
-        self.port = QtWidgets.QSpinBox(minimum=1025, maximum=65535, value=1337)
-        formLayout.addRow("Port", self.port)
-
-        # Check box to record all parameters
-        self.allParams = QtWidgets.QCheckBox()
-        self.allParams.setChecked(True)
-        self.allParams.checkStateChanged.connect(self.disableEnableParameters)
-        formLayout.addRow("Record All", self.allParams)
-
-        # Dictionary of all paramaters and their checkboxes so user can choose parameters
-        self.paramDict = dict()
-        for param in Utility.ForzaSettings.params:
-            checkBox = QtWidgets.QCheckBox()
-            checkBox.setChecked(True)
-            self.paramDict[param] = checkBox
-
-        # Add a checkbox for each parameter
-        for param, checkBox in self.paramDict.items():
-            formLayout.addRow(param, checkBox)
-
-        self.setWindowTitle("Configure Record Settings")
-
-        # Define the buttons at the bottom and connect them to the dialog
-        buttons = (QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        self.buttonBox = (QtWidgets.QDialogButtonBox(buttons))
-        self.buttonBox.accepted.connect(self.accept)
-        self.buttonBox.accepted.connect(self.collectAndSave)
-        self.buttonBox.rejected.connect(self.reject)
-
-        layout.addWidget(scrollArea)
-
-        layout.addWidget(self.buttonBox)
-        self.setLayout(layout)
-    
-    def collectAndSave(self):
-        """Collect all the chosen settings and emit a save signal"""
-
-        port = self.port.value()
-        allParams = self.allParams.isChecked()
-        selectedParams = dict()
-        if not allParams:
-            for param, checkBox in self.paramDict.items():
-                selectedParams[param] = checkBox.isChecked()
-        recordVideo = self.recordVideo.isChecked()
-
-        cameraDevice = None
-        cameraFormat = None
-        if recordVideo:  # don't bother changing the video/format settings if the user isn't going to record them
-            for cd in QMediaDevices.videoInputs():
-                if self.videoInputBox.currentText() == cd.description():
-                    cameraDevice = cd
-            if cameraDevice is not None:
-                cameraFormat = cameraDevice.videoFormats()[self.cameraFormatBox.currentIndex()]
-        
-        self.save.emit(port, allParams, selectedParams, recordVideo, cameraDevice, cameraFormat)
-    
-    def updateCameraFormatBox(self, cameraDescription: str):
-        """Updates the video format box given the description of the camera device"""
-
-        self.cameraFormatBox.clear()
-
-        for camera in QMediaDevices.videoInputs():
-            if cameraDescription == camera.description():
-                self.cameraFormatBox.addItems(Utility.QCameraFormatToStr(format) for format in camera.videoFormats())
-                self.cameraFormatBox.setCurrentIndex(0)
-    
-    def disableEnableVideo(self, checked: Qt.CheckState):
-        """Enable or disable the video and video format input boxes"""
-
-        if checked is Qt.CheckState.Checked:
-            self.videoInputBox.setEnabled(True)
-            self.cameraFormatBox.setEnabled(True)
-        else:
-            self.videoInputBox.setEnabled(False)
-            self.cameraFormatBox.setEnabled(False)
-    
-    @pyqtSlot(Qt.CheckState)
-    def disableEnableParameters(self, checked: Qt.CheckState):
-        """Enable or disable the checkboxes for individual parameters"""
-        
-        for param, checkBox in self.paramDict.items():
-            if checked is Qt.CheckState.Checked:
-                checkBox.setEnabled(True)
-            else:
-                checkBox.setEnabled(False)
-
-
 class MainWindow(QtWidgets.QMainWindow):
 
     # Stores previously recorded telemetry data
     session = Session()
 
-    # Stores all settings needed to record telemetry and video
-    record = Record()
-
     def __init__(self):
         super().__init__()
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
-
-        self.worker = None
-        self.thread = None
-
-        self.dashConfig = dict()
-        self.ip = ""
 
         # Central widget ----------------------
 
@@ -517,7 +301,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Action to stop and skip to the beginning of the footage
         stopAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-stop.png"))), "Stop", self)
         stopAction.setStatusTip("Stop Button: Stops the footage and skips to the beginning.")
-        stopAction.triggered.connect(self.videoPlayer.player.stop)
+        stopAction.triggered.connect(self.videoPlayer.stop)
         toolbar.addAction(stopAction)
 
         # Action to open a new session, to load the telemetry csv file and the associated mp4 video with the same name
@@ -539,7 +323,7 @@ class MainWindow(QtWidgets.QMainWindow):
         recordConfigAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Record Config", self)
         recordConfigAction.setShortcut(QKeySequence("Ctrl+S"))
         recordConfigAction.setStatusTip("Record Config: Change the telemetry and video recording settings.")
-        recordConfigAction.triggered.connect(self.configureRecord)
+        #recordConfigAction.triggered.connect(self.configureRecord)
         toolbar.addAction(recordConfigAction)
 
         # Add the menu bar and connect actions ----------------------------
@@ -561,6 +345,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add the Dock widgets, eg. graph and data table ---------------------
 
         # Record status widget
+        """
         recordStatusWidget = RecordStatusWidget(self.record.port, self.record.ip)
         recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
         recordStatusDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
@@ -568,6 +353,7 @@ class MainWindow(QtWidgets.QMainWindow):
         recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
         self.record.statusUpdate.connect(recordStatusWidget.update)
+        """
 
         # plot widget
         self.plotWidget = MultiPlotWidget()
@@ -586,38 +372,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
-        viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
-    
-    @pyqtSlot()
-    def configureRecord(self):
-        """Opens a RecordDialog dialog box to update the record settings (port, camera etc) and save
-        them to the Record object"""
+        #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
 
-        dlg = RecordDialog(parent=self)
-        dlg.save.connect(self.record.update)
-        if dlg.exec():  # If the user presses OK to save their settings
-            """ MOVED TO DIALOG ITSELF
-            port = dlg.port.value()
-            allParams = dlg.allParams.isChecked()
-            selectedParams = dict()
-            if not allParams:
-                for param, checkBox in dlg.paramDict.items():
-                    selectedParams[param] = checkBox.isChecked()
-            recordVideo = dlg.recordVideo.isChecked()
-
-            cameraDevice = None
-            cameraFormat = None
-            if recordVideo:  # don't bother changing the video/format settings if the user isn't going to record them
-                for cd in QMediaDevices.videoInputs():
-                    if dlg.videoInputBox.currentText() == cd.description():
-                        cameraDevice = cd
-                cameraFormat = cameraDevice.videoFormats()[dlg.cameraFormatBox.currentIndex()]
-            """
-            logging.info("Record settings changed successfully")
-        else:
-            logging.info("Record settings could not be changed")
-
-    @pyqtSlot()
     def openSession(self):
         """Opens and loads the telemetry csv file and accompanying video footage (if there is any) into the application"""
 
@@ -652,53 +408,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 dlg.exec()
                 return
             
-            self.videoPlayer.player.setSource(QUrl.fromLocalFile(str(videoFilePath)))
+            self.videoPlayer.setSource(QUrl.fromLocalFile(str(videoFilePath)))
             logging.info("Loaded video file")
 
-    @pyqtSlot()
-    def toggle_loop(self, checked):
-        """
-        Starts/stops listening for Forza UDP packets
-        """
-        if not checked:
-            self.worker.working = False
-            logging.debug("Worker set to false")
-            self.thread.quit()
-        else:
-            logging.debug("Thread started")
-            self.worker = Worker(self.dashConfig["port"])  # a new worker
-            self.thread = QThread()  # a new thread to listen for packets
-            self.worker.moveToThread(self.thread)
-            # move the worker into the thread, do this first before connecting the signals
-            self.thread.started.connect(self.worker.work)
-            # begin worker object's loop when the thread starts running
-            self.worker.collected.connect(self.onCollected)  # Update the widgets every time a packet is collected
-            self.worker.finished.connect(self.loop_finished)  # Do something when the worker loop ends
-
-            self.worker.finished.connect(self.thread.quit)  # Tell the thread to stop running
-            self.worker.finished.connect(self.worker.deleteLater)  # Have worker mark itself for deletion
-            self.thread.finished.connect(self.thread.deleteLater)  # Have thread mark itself for deletion
-            # Make sure those last two are connected to themselves or you will get random crashes
-            self.thread.start()
-
-    def onCollected(self, data):
-        """Called when a single UDP packet is collected. Receives the unprocessed
-        packet data, transforms it into a Forza Data Packet and emits the update signal with
-        that forza data packet object, and the dashboard config dictionary. If the race
-        is not on, it does not emit the signal"""
-
-        logging.debug("onCollected: Received Data")
-        fdp = ForzaDataPacket(data)
-
-        isRacing = bool(fdp.is_race_on)
-        self.isRacing.emit(isRacing)
-
-        self.session.update(fdp)
-
-        if not fdp.is_race_on:
-            return
-        self.updateSignal.emit(fdp, self.dashConfig)
-
-    def loop_finished(self):
-        """Called after the port is closed and the dashboard stops listening to packets"""
-        logging.info("Finished listening")
+            # Testing the video player displaying multiple viewpoints
+            logging.info("Testing the video player...")
+            self.videoPlayer.addViewer(20000)
+            self.videoPlayer.addViewer(3000)  # 3 Seconds into the video

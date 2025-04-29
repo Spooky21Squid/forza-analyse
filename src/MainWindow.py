@@ -55,9 +55,13 @@ class MultiPlotWidget(QtWidgets.QWidget):
         self.addNewPlot("time", "cur_lap_time")
         self.addNewPlot("dist_traveled", "speed")
         self.addNewPlot("dist_traveled", "steer")
-        
-    
-    @pyqtSlot()
+
+        t = self.plots["cur_lap_time"].getPlotItem().getViewBox()
+        u = self.plots["speed"].getPlotItem().getViewBox()
+        v = self.plots["steer"].getPlotItem().getViewBox()
+
+        v.setXLink(t)
+
     def addNewPlot(self, x: str, y: str):
         """
         Adds a new plot to the layout
@@ -70,7 +74,6 @@ class MultiPlotWidget(QtWidgets.QWidget):
         
         xAxis = self.data[x]
         newPlot = pg.plot(title = y)
-        #newPlot = self.addPlot(title=y)
         newPlot.setMinimumHeight(300)
         logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
         yAxis = self.data[y]
@@ -92,8 +95,11 @@ class Session(QObject):
     # Emitted when the session object is updated so widgets can display the latest values from the numpy array
     updated = pyqtSignal(np.ndarray)
 
-    def __init__(self):
-        super().__init__()
+    # Emitted when a file is loaded, and contains the filepath as a string
+    loaded = pyqtSignal(str)
+
+    def __init__(self, parent = None):
+        super().__init__(parent = parent)
         #self.newLapIndexes = []  # Stores the first index of each new lap
 
     @pyqtSlot()
@@ -121,6 +127,30 @@ class Session(QObject):
         self.updated.emit(self.data)
         logging.info("Updated session telemetry data")
         return True
+    
+    def open(self):
+        """Opens and loads the telemetry csv file into the Session object"""
+
+        # Dialog to get the csv file
+        dlg = QtWidgets.QFileDialog(parent = self.parent())
+        dlg.setWindowTitle("Open Session")
+        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
+        dlg.setNameFilter("*.csv")
+
+        # If user presses okay
+        if dlg.exec():
+            filePathList = dlg.selectedFiles()
+            logging.info("Opened file: {}".format(filePathList[0]))
+            data = np.genfromtxt(filePathList[0], delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
+            self.loaded.emit(filePathList[0])
+
+            if not self.update(data):  # Update the session with new udp data
+                # open dialog box telling user the csv file couldnt be loaded
+                dlg = QtWidgets.QMessageBox()
+                dlg.setWindowTitle("Telemetry file not loaded.")
+                dlg.setText('The file "{}" could not be loaded.'.format(filePathList[0]))
+                dlg.exec()
+                return
 
 
 class LapViewer(QtWidgets.QWidget):
@@ -141,7 +171,7 @@ class LapViewer(QtWidgets.QWidget):
         # Eg. if position = 0, the playback starts from the very beginning of the video.
         self.startingPosition = position
 
-        self.mediaPlayer.setSource(source)
+        self.mediaPlayer.setSource(QUrl(source))
 
         # Set the position only when the video has buffered, otherwise it won't set position
         self.mediaPlayer.mediaStatusChanged.connect(self._positionSettable)
@@ -190,7 +220,7 @@ class VideoPlayer(QtWidgets.QWidget):
         self.lapViewers = list()
 
         # The file path to the session's video
-        self.source = None
+        self.source: QUrl = None
         
         self.lt = QtWidgets.QHBoxLayout()
         self.setLayout(self.lt)
@@ -220,11 +250,30 @@ class VideoPlayer(QtWidgets.QWidget):
         Parameters
         ----------
 
-        filePath : The path to the new video source
+        filePath : The path to the new video source. If the suffix is not a supported
+        type (eg. mp4), it will be converted to one.
         """
 
-        # Do some error checking here. If file doesn't exist or is in the wront format, tell user
-        self.source = filePath
+        path = pathlib.Path(filePath).resolve()
+
+        # Find an mp4 video file with the same name
+        if path.suffix != ".mp4":
+            path = path.with_suffix(".mp4")
+
+        if not path.exists():
+            dlg = QtWidgets.QMessageBox(self)
+            dlg.setWindowTitle("Video file not loaded.")
+            dlg.setText('The video file "{}" could not be loaded.'.format(str(path)))
+            dlg.exec()
+            return
+        
+        self.source = QUrl.fromLocalFile(str(path))
+        logging.info("Loaded video file")
+
+        # Testing the video player displaying multiple viewpoints
+        logging.info("Testing the video player...")
+        self.addViewer(20000)
+        self.addViewer(3000)  # 3 Seconds into the video
     
     def stop(self):
         """Stops the lap viewers and resets them to their given start positions"""
@@ -268,17 +317,18 @@ class RecordStatusWidget(QtWidgets.QFrame):
 
 class MainWindow(QtWidgets.QMainWindow):
 
-    # Stores previously recorded telemetry data
-    session = Session()
-
     def __init__(self):
         super().__init__()
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
+        # Stores loaded telemetry data
+        self.session = Session(self)
+
         # Central widget ----------------------
 
         self.videoPlayer = VideoPlayer()
+        self.session.loaded.connect(self.videoPlayer.setSource)  # When a telemetry file is loaded, an accompanying video will be loaded
         self.setCentralWidget(self.videoPlayer)
 
         # Add the Toolbar and Actions --------------------------
@@ -308,7 +358,7 @@ class MainWindow(QtWidgets.QMainWindow):
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
         openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
-        openSessionAction.triggered.connect(self.openSession)
+        openSessionAction.triggered.connect(self.session.open)
         toolbar.addAction(openSessionAction)
 
         # Action to start/stop recording a session (Record UDP data and a video input source)
@@ -373,45 +423,3 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
-
-    def openSession(self):
-        """Opens and loads the telemetry csv file and accompanying video footage (if there is any) into the application"""
-
-        # Dialog to get the csv file
-        dlg = QtWidgets.QFileDialog(self)
-        dlg.setWindowTitle("Open Session")
-        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
-        dlg.setNameFilter("*.csv")
-
-        # If user presses okay
-        if dlg.exec():
-            filePathList = dlg.selectedFiles()
-            logging.info("Opened file: {}".format(filePathList[0]))
-            data = np.genfromtxt(filePathList[0], delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
-            if not self.session.update(data):  # Update the session with new udp data
-                # open dialog box telling user the csv file couldnt be loaded
-                dlg = QtWidgets.QMessageBox(self)
-                dlg.setWindowTitle("Telemetry file not loaded.")
-                dlg.setText('The file "{}" could not be loaded.'.format(filePathList[0]))
-                dlg.exec()
-                return
-
-            # Try to find a video with the same file name in the same folder as the telemetry file and load it
-            filePath = pathlib.Path(filePathList[0]).resolve()
-            videoFilePath = filePath.with_suffix(".mp4")
-
-            if not videoFilePath.exists():
-                # open dialog box telling user no video could be found
-                dlg = QtWidgets.QMessageBox(self)
-                dlg.setWindowTitle("Video file not loaded.")
-                dlg.setText('The video file "{}" could not be loaded.'.format(str(videoFilePath)))
-                dlg.exec()
-                return
-            
-            self.videoPlayer.setSource(QUrl.fromLocalFile(str(videoFilePath)))
-            logging.info("Loaded video file")
-
-            # Testing the video player displaying multiple viewpoints
-            logging.info("Testing the video player...")
-            self.videoPlayer.addViewer(20000)
-            self.videoPlayer.addViewer(3000)  # 3 Seconds into the video

@@ -84,6 +84,86 @@ class MultiPlotWidget(QtWidgets.QWidget):
 
         self.plots[y] = newPlot
         self.lt.addWidget(newPlot)
+    
+    def movePlayerHead(position):
+        """Moves the vertical line of the graphs"""
+        pass
+
+
+class Lap():
+    """Stores all the important collected and calculated data from a single lap"""
+
+    def __init__(self):
+        self.lapNumber: int = None
+
+        # Uses the last_lap_time parameter from a packet collected from the next lap. This is because the last packet recorded
+        # during a lap will be slightly before the finish line, and so the recorded lap time will be slightly quicker than the
+        # real lap time.
+        # The only problem with this is the last lap will have to use a lap time collected from the last packet. This means the last
+        # lap's lap time will be slightly quicker than real (about 1/60th of a second, or 0.017s). But it's better to have an accurate
+        # lap time for 99% of the laps than to be consistently slightly wrong every lap.
+        self.lapTime: int = None  # In seconds
+
+        self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
+        self.fastest: bool = False
+
+        self.inLap: bool = False
+        self.outLap: bool = False
+    
+    def generate(laps: np.ndarray):
+        """
+        Generates a list of new Lap objects given a list of the last packets of each lap. The very last lap will only be
+        counted if it is a complete lap, ie. the user didn't quit in the middle of a lap.
+
+        Parameters
+        ----------
+        data : A 1d numpy array containing the last recorded packets of each lap
+        """
+
+        newLapList = []
+
+        # Find the fastest lap time, so that it can be compared with each lap
+        bestLapTime = laps["best_lap_time"].min()
+
+        if len(laps) > 1:
+            i = 0
+            for i in range(0, len(laps) - 1):
+                row = laps[row]
+                nextRow = laps[row + 1]
+
+                newLap = Lap()
+                newLap.lapNumber = row["lap_no"]
+                newLap.lapTime = nextRow["last_lap_time"]
+                newLap.lapBegin = row["cur_race_time"]
+
+                if newLap["best_lap_time"] == bestLapTime:
+                    newLap.fastest = True
+                
+                # Set inLap and outLap
+
+                newLapList.append(newLap)
+            
+            # Add the very last row if the distance traveled that lap roughly matches the first lap
+            tolerance = 1  # lap should be within the the first lap's distance +/- tolerance
+
+            totalDistance = laps[-1]["dist_traveled"]
+            lastLapDistance = totalDistance - laps[-1]["dist_traveled"]
+            firstLapDistance = laps[0]["dist_traveled"]
+
+            if lastLapDistance > firstLapDistance - tolerance and lastLapDistance < firstLapDistance + tolerance:
+                row = laps[-1]
+
+                newLap = Lap()
+                newLap.lapNumber = row["lap_no"]
+                newLap.lapTime = row["cur_lap_time"]
+                newLap.lapBegin = row["cur_race_time"]
+
+                if newLap["best_lap_time"] == bestLapTime:
+                    newLap.fastest = True
+                
+                # Set inLap and outLap
+
+                newLapList.append(newLap)
 
 
 class Session(QObject):
@@ -102,6 +182,14 @@ class Session(QObject):
         super().__init__(parent = parent)
         #self.newLapIndexes = []  # Stores the first index of each new lap
 
+        # Contains all the Lap objects generated from the telemetry, in order from lap 0 to lap n or lap n - 1.
+        # Lap n may or may not be included, depending on if the user finishes it (like in a lapped race) or if
+        # they quit in the middle (like in free practice).
+
+        # Lap n can be included if the lap's distance is very close to the other lap's distances. Otherwise it is
+        # likely that the user quit during the lap.
+        self.laps = list()
+
     @pyqtSlot()
     def update(self, data: np.ndarray) -> bool:
         """
@@ -110,20 +198,33 @@ class Session(QObject):
 
         Parameters
         ----------
-        data : The telemetry data
+        data : The telemetry data as a numpy array
         """
         self.data = data
 
         # Get the best lap time
-        masked = np.ma.masked_equal(data["best_lap_time"], 0, copy=False)  # Mask out the rows where best lap time is 0
-        bestLapTime = masked.min()
-        logging.info("Best lap time: {}".format(bestLapTime))
+        #masked = np.ma.masked_equal(data["best_lap_time"], 0, copy=False)  # Mask out the rows where best lap time is 0
+        #bestLapTime = masked.min()
+        #logging.info("Best lap time: {}".format(bestLapTime))
 
         # ---------------
         # Group the records by lap, then just use the last record in each group to get lap time, dist etc
         # Can pre-define sectors for each lap based on distance (recorded by forza), then get the cur lap time at that distance
         # ---------------
+
+        # Get the last packet of each lap and append onto lapRows
+        lapRows = []
+        lastRow = data[0]
+        for row in data:
+            if row["lap_no"] == lastRow["lap_no"] + 1:
+                lapRows.append(lastRow)
+            lastRow = row
         
+        # Add the very last packet onto lapRows (will be used to help create the second to last lap even if it's incomplete)
+        lapRows.append(data[-1])
+
+        #self.laps = Lap.generate(lapRows)
+                
         self.updated.emit(self.data)
         logging.info("Updated session telemetry data")
         return True
@@ -213,8 +314,12 @@ class VideoPlayer(QtWidgets.QWidget):
     Displays the videos of the session to the user. Can display multiple different laps side by side.
     """
 
-    def __init__(self):
-        super().__init__()
+    # Emitted when the primary video is playing, and the position is updated. Emitted with position as an int, as
+    # milliseconds since the beginning of the video
+    positionChanged = pyqtSignal(int)
+
+    def __init__(self, parent = None):
+        super().__init__(parent = parent)
         
         # A list of the different laps displayed as LapViewer widgets
         self.lapViewers = list()
@@ -327,7 +432,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Central widget ----------------------
 
-        self.videoPlayer = VideoPlayer()
+        self.videoPlayer = VideoPlayer(self)
         self.session.loaded.connect(self.videoPlayer.setSource)  # When a telemetry file is loaded, an accompanying video will be loaded
         self.setCentralWidget(self.videoPlayer)
 

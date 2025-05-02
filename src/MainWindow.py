@@ -185,12 +185,43 @@ class Session(QObject):
         
         # Add the very last packet onto lapRows (will be used to help create the second to last lap even if it's incomplete)
         lapRows.append(data[-1])
-
-        newLapList = []
+        includeLastLap = False  # Whether the last lap is complete and will be included
 
         # Find the fastest lap time, so that it can be compared with each lap
-        bestLapTime = data["best_lap_time"].min()
+        # Use last_lap_time because best_lap_time only counts Forza Clean laps
+        bestLapTime = data["last_lap_time"].min()
+        
+        # Include the last lap if the distance traveled that lap roughly matches the first lap
+        tolerance = 1  # lap should be within the the first lap's distance +/- tolerance in metres
+
+        totalDistance = data[-1]["dist_traveled"]
+        lastLapDistance = totalDistance - data[-1]["dist_traveled"]
+        firstLapDistance = data[0]["dist_traveled"]
+
+        if lastLapDistance > firstLapDistance - tolerance and lastLapDistance < firstLapDistance + tolerance:
+            includeLastLap = True
+        
+        # If last lap is complete, consider it for fastest lap
+        if includeLastLap:
+            lastLapTime = data["cur_lap_time"][-1]
+            if lastLapTime < bestLapTime:
+                bestLapTime = lastLapTime
+        
+        # Get the number of laps in the session
+        numberOfLaps = data["lap_no"].max() - data["lap_no"].min()
+
+        # Separate the laps into a number of views
+        lapViews = OrderedDict()
+        uniqueLaps, lapStartIndex = np.unique(data["lap_no"], return_index=True)
+        lapStartIndex = np.append(lapStartIndex, [len(data)])
+
+        for i in range(0, len(uniqueLaps)):
+            lapViews[uniqueLaps[i]] = data[lapStartIndex[i]:lapStartIndex[i+1]]
+        
+        #--------------------------------------------------------------
+
         """
+        newLapList = []
         if len(laps) > 1:
             i = 0
             for i in range(0, len(laps) - 1):

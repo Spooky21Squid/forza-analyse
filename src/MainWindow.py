@@ -17,6 +17,7 @@ import logging
 import select
 import socket
 from enum import Enum
+from collections import OrderedDict
 
 """
 Currently:
@@ -90,48 +91,113 @@ class MultiPlotWidget(QtWidgets.QWidget):
         pass
 
 
-class Lap():
-    """Stores all the important collected and calculated data from a single lap"""
+class Session(QObject):
+    """
+    Stores the telemetry data and associated calculated data for a currently opened session. A session
+    represents a single unit of time's worth of continuously logged packets saved as a csv file.
+    """
 
-    def __init__(self):
-        self.lapNumber: int = None
+    class Lap():
+        """Stores all the important collected and calculated data from a single lap"""
 
-        # Uses the last_lap_time parameter from a packet collected from the next lap. This is because the last packet recorded
-        # during a lap will be slightly before the finish line, and so the recorded lap time will be slightly quicker than the
-        # real lap time.
-        # The only problem with this is the last lap will have to use a lap time collected from the last packet. This means the last
-        # lap's lap time will be slightly quicker than real (about 1/60th of a second, or 0.017s). But it's better to have an accurate
-        # lap time for 99% of the laps than to be consistently slightly wrong every lap.
-        self.lapTime: int = None  # In seconds
+        def __init__(self):
+            self.lapNumber: int = None
 
-        self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
-        self.fastest: bool = False
+            # Uses the last_lap_time parameter from a packet collected from the next lap. This is because the last packet recorded
+            # during a lap will be slightly before the finish line, and so the recorded lap time will be slightly quicker than the
+            # real lap time.
+            # The only problem with this is the last lap will have to use a lap time collected from the last packet. This means the last
+            # lap's lap time will be slightly quicker than real (about 1/60th of a second, or 0.017s). But it's better to have an accurate
+            # lap time for 99% of the laps than to be consistently slightly wrong every lap.
+            self.lapTime: int = None  # In seconds
 
-        self.inLap: bool = False
-        self.outLap: bool = False
+            self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
+            self.fastest: bool = False
+
+            self.inLap: bool = False
+            self.outLap: bool = False
+
+
+    def __init__(self, data: np.ndarray, filePath = pathlib.Path, parent = None):
+        super().__init__(parent = parent)
+
+        # Contains all the Lap objects generated from the telemetry, in order from lap 0 to lap n or lap n - 1.
+        # Lap n may or may not be included, depending on if the user finishes it (like in a lapped race) or if
+        # they quit in the middle (like in free practice).
+
+        # An ordered dictionary of Lap objects. Indexed by lap number, may not always start at 1
+        self.laps = OrderedDict() 
+
+        self.data = Session._sortData(data)
+        self.filePath = filePath  # A pathlib.Path object
+        self.name = str(filePath.stem)  # Name of the session, equal to the name of the file
+
+        self.laps = Session._getLaps(self.data)
+                
+        logging.info("Created Session")
     
-    def generate(laps: np.ndarray):
+    def _sortData(data: np.ndarray):
+        """Sorts the packet numpy array based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
+        by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
+        can overflow after about 50 days. This will detect an overflow and re-sort the fields to restore true chronological order."""
+
+        #threshold = 3600000  # If the gap between adjacent timestamps is larger than this, an overflow has occurred (3600000ms is about an hour)
+        threshold = 1000  # For testing
+        data.sort(order="timestamp_ms", kind="stable")  # First in-place sort to remove UDP unreliability
+
+        # Iterate through array and try to detect an overflow
+        overflowIndex = -1
+        for i in range(1, len(data["timestamp_ms"])):
+            if data["timestamp_ms"][i] - data["timestamp_ms"][i - 1] > threshold:
+                overflowIndex = i
+                break
+        
+        # If the overflow index has changed, meaning an overflow has been detected at this index:
+        if overflowIndex != -1:
+
+            # Find the max value for timestamp_ms (Should be at the end)
+            maxTimestamp = data["timestamp_ms"].max()
+
+            # Add the max value + 1 to each of the timestamps after the overflow
+            for i in range(0, overflowIndex):
+                data["timestamp_ms"][i] += maxTimestamp + 1
+            
+            # Re-sort the array in-place to put those rows after the overflow at the back again
+            data.sort(order="timestamp_ms", kind="stable")
+
+    def _getLaps(data: np.ndarray):
         """
-        Generates a list of new Lap objects given a list of the last packets of each lap. The very last lap will only be
+        Generates a list of new Lap objects given the sorted packet data. The very last lap will only be
         counted if it is a complete lap, ie. the user didn't quit in the middle of a lap.
 
         Parameters
         ----------
-        data : A 1d numpy array containing the last recorded packets of each lap
+        data : A 1d numpy array containing the sorted session telemetry data
         """
+
+        # Get the last packet of each lap and append onto lapRows
+        lapRows = []
+        lastRow = data[0]
+        for row in data:
+            if row["lap_no"] == lastRow["lap_no"] + 1:
+                lapRows.append(lastRow)
+            lastRow = row
+        
+        # Add the very last packet onto lapRows (will be used to help create the second to last lap even if it's incomplete)
+        lapRows.append(data[-1])
 
         newLapList = []
 
         # Find the fastest lap time, so that it can be compared with each lap
-        bestLapTime = laps["best_lap_time"].min()
-
+        bestLapTime = data["best_lap_time"].min()
+        """
         if len(laps) > 1:
             i = 0
             for i in range(0, len(laps) - 1):
                 row = laps[row]
                 nextRow = laps[row + 1]
 
-                newLap = Lap()
+                newLap = Session.Lap()
                 newLap.lapNumber = row["lap_no"]
                 newLap.lapTime = nextRow["last_lap_time"]
                 newLap.lapBegin = row["cur_race_time"]
@@ -153,7 +219,7 @@ class Lap():
             if lastLapDistance > firstLapDistance - tolerance and lastLapDistance < firstLapDistance + tolerance:
                 row = laps[-1]
 
-                newLap = Lap()
+                newLap = Session.Lap()
                 newLap.lapNumber = row["lap_no"]
                 newLap.lapTime = row["cur_lap_time"]
                 newLap.lapBegin = row["cur_race_time"]
@@ -164,94 +230,7 @@ class Lap():
                 # Set inLap and outLap
 
                 newLapList.append(newLap)
-
-
-class Session(QObject):
-    """
-    Stores the telemetry data and associated calculated data for the currently opened session. A session
-    represents a single unit of time's worth of continuously logged packets saved as a csv file.
-    """
-
-    # Emitted when the session object is updated so widgets can display the latest values from the numpy array
-    updated = pyqtSignal(np.ndarray)
-
-    # Emitted when a file is loaded, and contains the filepath as a string
-    loaded = pyqtSignal(str)
-
-    def __init__(self, parent = None):
-        super().__init__(parent = parent)
-        #self.newLapIndexes = []  # Stores the first index of each new lap
-
-        # Contains all the Lap objects generated from the telemetry, in order from lap 0 to lap n or lap n - 1.
-        # Lap n may or may not be included, depending on if the user finishes it (like in a lapped race) or if
-        # they quit in the middle (like in free practice).
-
-        # Lap n can be included if the lap's distance is very close to the other lap's distances. Otherwise it is
-        # likely that the user quit during the lap.
-        self.laps = list()
-
-    @pyqtSlot()
-    def update(self, data: np.ndarray) -> bool:
-        """
-        Updates the currently opened session using a numpy array containing the udp data.
-        Returns True if the session was updated successfully, false otherwise.
-
-        Parameters
-        ----------
-        data : The telemetry data as a numpy array
-        """
-        self.data = data
-
-        # Get the best lap time
-        #masked = np.ma.masked_equal(data["best_lap_time"], 0, copy=False)  # Mask out the rows where best lap time is 0
-        #bestLapTime = masked.min()
-        #logging.info("Best lap time: {}".format(bestLapTime))
-
-        # ---------------
-        # Group the records by lap, then just use the last record in each group to get lap time, dist etc
-        # Can pre-define sectors for each lap based on distance (recorded by forza), then get the cur lap time at that distance
-        # ---------------
-
-        # Get the last packet of each lap and append onto lapRows
-        lapRows = []
-        lastRow = data[0]
-        for row in data:
-            if row["lap_no"] == lastRow["lap_no"] + 1:
-                lapRows.append(lastRow)
-            lastRow = row
-        
-        # Add the very last packet onto lapRows (will be used to help create the second to last lap even if it's incomplete)
-        lapRows.append(data[-1])
-
-        #self.laps = Lap.generate(lapRows)
-                
-        self.updated.emit(self.data)
-        logging.info("Updated session telemetry data")
-        return True
-    
-    def open(self):
-        """Opens and loads the telemetry csv file into the Session object"""
-
-        # Dialog to get the csv file
-        dlg = QtWidgets.QFileDialog(parent = self.parent())
-        dlg.setWindowTitle("Open Session")
-        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
-        dlg.setNameFilter("*.csv")
-
-        # If user presses okay
-        if dlg.exec():
-            filePathList = dlg.selectedFiles()
-            logging.info("Opened file: {}".format(filePathList[0]))
-            data = np.genfromtxt(filePathList[0], delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
-            self.loaded.emit(filePathList[0])
-
-            if not self.update(data):  # Update the session with new udp data
-                # open dialog box telling user the csv file couldnt be loaded
-                dlg = QtWidgets.QMessageBox()
-                dlg.setWindowTitle("Telemetry file not loaded.")
-                dlg.setText('The file "{}" could not be loaded.'.format(filePathList[0]))
-                dlg.exec()
-                return
+                """
 
 
 class LapViewer(QtWidgets.QWidget):
@@ -427,13 +406,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
-        # Stores loaded telemetry data
-        self.session = Session(self)
+        # A dictionary of Session objects to store telemetry from multiple loaded CSV files
+        # Keys are the filename without the extension, and Items are the Session objects
+        self.sessions = dict()
 
         # Central widget ----------------------
 
         self.videoPlayer = VideoPlayer(self)
-        self.session.loaded.connect(self.videoPlayer.setSource)  # When a telemetry file is loaded, an accompanying video will be loaded
         self.setCentralWidget(self.videoPlayer)
 
         # Add the Toolbar and Actions --------------------------
@@ -463,7 +442,7 @@ class MainWindow(QtWidgets.QMainWindow):
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
         openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
-        openSessionAction.triggered.connect(self.session.open)
+        openSessionAction.triggered.connect(self.openSessions)
         toolbar.addAction(openSessionAction)
 
         # Action to start/stop recording a session (Record UDP data and a video input source)
@@ -512,7 +491,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # plot widget
         self.plotWidget = MultiPlotWidget()
-        self.session.updated.connect(self.plotWidget.update)
+        #self.session.updated.connect(self.plotWidget.update)
 
         plotScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
         plotScrollArea.setWidget(self.plotWidget)
@@ -528,3 +507,23 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
+    
+    def openSessions(self):
+        """Opens and loads the telemetry csv files into the sessions dict"""
+
+        # Dialog to get the csv files
+        dlg = QtWidgets.QFileDialog(self)
+        dlg.setWindowTitle("Open Sessions")
+        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
+        dlg.setNameFilter("*.csv")
+
+        # If user presses okay
+        if dlg.exec():
+            filePathList = dlg.selectedFiles()
+            logging.info("Found Files: {}".format(filePathList))
+
+            for filePath in filePathList:
+                data = np.genfromtxt(filePath, delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
+                newSession = Session(data, pathlib.Path(filePath).resolve(), self)
+                fileName = pathlib.Path(filePath).resolve().stem
+                self.sessions[fileName] = newSession  # Create a new entry in the sessions dict

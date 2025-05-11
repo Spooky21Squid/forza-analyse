@@ -100,8 +100,9 @@ class Session(QObject):
     class Lap():
         """Stores all the important collected and calculated data from a single lap"""
 
-        def __init__(self):
-            self.lapNumber: int = None
+        def __init__(self, lapNumber: int = None, lapTime: int = None,
+                     lapBegin: int = None, data: np.ndarray = None, fastest = False):
+            self.lapNumber: int = lapNumber
 
             # Uses the last_lap_time parameter from a packet collected from the next lap. This is because the last packet recorded
             # during a lap will be slightly before the finish line, and so the recorded lap time will be slightly quicker than the
@@ -109,13 +110,15 @@ class Session(QObject):
             # The only problem with this is the last lap will have to use a lap time collected from the last packet. This means the last
             # lap's lap time will be slightly quicker than real (about 1/60th of a second, or 0.017s). But it's better to have an accurate
             # lap time for 99% of the laps than to be consistently slightly wrong every lap.
-            self.lapTime: int = None  # In seconds
+            self.lapTime: int = lapTime  # In seconds
 
-            self.lapBegin: int = None  # Time the lap began in seconds relative to the start of the race (cur_race_time)
-            self.fastest: bool = False
+            self.lapBegin: int = lapBegin  # Time the lap began in seconds relative to the start of the race (cur_race_time)
+            self.fastest: bool = fastest  # True if the fastest lap in session, false if not
 
-            self.inLap: bool = False
-            self.outLap: bool = False
+            self.data: np.ndarray = data  # A view of the portion of the session data that covers the lap
+
+            #self.inLap: bool = False
+            #self.outLap: bool = False
 
 
     def __init__(self, data: np.ndarray, filePath = pathlib.Path, parent = None):
@@ -125,24 +128,124 @@ class Session(QObject):
         # Lap n may or may not be included, depending on if the user finishes it (like in a lapped race) or if
         # they quit in the middle (like in free practice).
 
-        # An ordered dictionary of Lap objects. Indexed by lap number, may not always start at 1
-        self.laps = OrderedDict() 
+        # A structured numpy array containing data about the laps in a session
+        self.laps: np.ndarray = None
+        #np.array(dtype=np.dtype([('lap_no', np.int64), ("lap_time", np.float64), ("lap_begin_time", np.float64), ("dist_traveled", np.float64)]))
+        self.lapViews = dict()  # A dictionary of laps to numpy views of the data included in the lap, from the Session data
+        
+        self.trackID: int = None  # The forza-assigned ID of the track
+        self.lapDistance: int = None  # The distance over a single lap, calculated at the end of the first lap
 
-        self.data = Session._sortData(data)
+        self.data: np.ndarray = None  # The entire data of a session
         self.filePath = filePath  # A pathlib.Path object
         self.name = str(filePath.stem)  # Name of the session, equal to the name of the file
 
-        self.laps = Session._getLaps(self.data)
-                
+        # Sort the data and initialise the Session object
+        Session._sortData(data)
+        self.initialise(data)
+
         logging.info("Created Session")
     
+    def addLap(self, data: np.ndarray):
+        """Adds a single new lap onto the session, given all the packets collected during that lap. If there are multiple laps
+        included in data, it will throw an exception. If the lap isn't complete (ie. the dist_traveled is too short, meaning
+        the player didn't finish the lap) the lap will not be included but will still be used to improve the previous lap. A *copy* of
+        data will be used for the Session."""
+
+        # How to add a new lap -----------------
+        # Get the lap number
+        # Get the following data from the lap's last packet:
+        #   last_lap_time
+        #   cur_lap_time (this lap's lap time)
+        #   dist_traveled
+        # Get this data from the first packet:
+        #   cur_race_time (time the lap began)
+        # If this is the first lap:
+        #   use dist_traveled to assign the distance to a single lap
+        #   use cur_lap_time as the lap's time and the session fastest time
+        # If this lap follows another lap: 
+        #   use last_lap_time to update the previous lap's time and update the session fastest lap time if needed
+
+        data = data.copy()
+
+        # Get the lap number (If there are many laps, throw exception)
+        uniqueLaps, uniqueIndexes = np.unique(data["lap_no"], return_index=True)
+        if len(uniqueLaps) > 1:
+            raise ValueError("Multiple laps were included in the data array - Couldn't add a lap", uniqueLaps.tolist())
+        currentLapNumber = uniqueLaps[0]
+
+        # Get info from the last packet
+        lastLapTime, curLapTime, distTraveled = data[-1]["last_lap_time"], data[-1]["cur_lap_time"], data[-1]["dist_traveled"]
+
+        # Get info from the first packet
+        lapBegin, trackID = data[0]["cur_race_time"], data[0]["track_ordinal"]
+
+        # Create the lap
+        currentLapData = np.array([(currentLapNumber, curLapTime, lapBegin, distTraveled)], dtype=np.dtype([("lap_no", "i8"), ("lap_time", "f8"), ("lap_begin_time", "f8"), ("dist_traveled", "f8")]))
+
+        # If this is the first lap (if the laps array is empty), use all the data as it is (no previous lap to edit)
+        # and set the track info
+        if self.laps is None:
+            self.lapDistance = distTraveled
+            self.trackID = trackID
+            self.laps = currentLapData
+        else:
+            # Get the previous lap and update the lap time with a more accurate figure from this lap
+            print(self.laps)
+            prevLap = self.laps[-1]
+            prevLap["lap_time"] = lastLapTime
+
+            # Decide if this lap is a complete lap or not
+            currentLapDistance = distTraveled - prevLap["dist_traveled"]
+            tolerance = 3  # lap should be within the the first lap's distance +/- tolerance in metres
+            if currentLapDistance > self.lapDistance - tolerance and currentLapDistance < self.lapDistance + tolerance:
+                self.laps = np.hstack((self.laps, currentLapData))
+        
+        # Update the Session's data array with the new lap's data
+        if self.data is not None:
+            self.data = np.hstack((self.data, data))
+        else:
+            self.data = data
+        
+        # Update the Session's individual lap views after the Session's data array
+        self.updateLapViews()
+        
+    def updateLapViews(self):
+        """Updates the lapViews dictionary when the Session is updated with a new lap"""
+        
+        # Separate the Session data into views for each lap
+        self.lapViews.clear()
+        uniqueLaps, lapStartIndex = np.unique(self.data["lap_no"], return_index=True)
+        lapStartIndex = np.append(lapStartIndex, [len(self.data)])
+
+        # Create a new view by slicing the data array
+        for i in range(0, len(uniqueLaps)):
+            self.lapViews[uniqueLaps[i]] = self.data[lapStartIndex[i]:lapStartIndex[i+1]]
+    
+    def initialise(self, data: np.ndarray):
+        """Initialises the Session object from pre-recorded telemetry data"""
+
+        # Separate the data into views for each unique lap
+        lapViews = OrderedDict()
+        uniqueLaps, lapStartIndex = np.unique(data["lap_no"], return_index=True)
+        lapStartIndex = np.append(lapStartIndex, [len(data)])
+
+        for i in range(0, len(uniqueLaps)):
+            lapViews[uniqueLaps[i]] = data[lapStartIndex[i]:lapStartIndex[i+1]]
+        
+        # For each lap view, create a lap entry and add it to the session object
+        for view in lapViews.values():
+            self.addLap(view)
+        
+        logging.info("Initialised. Laps: {}".format(self.laps))
+
     def _sortData(data: np.ndarray):
         """Sorts the packet numpy array based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
         by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
         can overflow after about 50 days. This will detect an overflow and re-sort the fields to restore true chronological order."""
 
-        #threshold = 3600000  # If the gap between adjacent timestamps is larger than this, an overflow has occurred (3600000ms is about an hour)
-        threshold = 1000  # For testing
+        threshold = 3600000  # If the gap between adjacent timestamps is larger than this, an overflow has occurred (3600000ms is about an hour)
+        #threshold = 1000  # For testing
         data.sort(order="timestamp_ms", kind="stable")  # First in-place sort to remove UDP unreliability
 
         # Iterate through array and try to detect an overflow
@@ -189,13 +292,13 @@ class Session(QObject):
 
         # Find the fastest lap time, so that it can be compared with each lap
         # Use last_lap_time because best_lap_time only counts Forza Clean laps
-        bestLapTime = data["last_lap_time"].min()
+        bestLapTime = np.ma.masked_equal(data["last_lap_time"], 0).min()
         
         # Include the last lap if the distance traveled that lap roughly matches the first lap
         tolerance = 1  # lap should be within the the first lap's distance +/- tolerance in metres
 
         totalDistance = data[-1]["dist_traveled"]
-        lastLapDistance = totalDistance - data[-1]["dist_traveled"]
+        lastLapDistance = totalDistance - lapRows[-1]["dist_traveled"]
         firstLapDistance = data[0]["dist_traveled"]
 
         if lastLapDistance > firstLapDistance - tolerance and lastLapDistance < firstLapDistance + tolerance:
@@ -217,6 +320,11 @@ class Session(QObject):
 
         for i in range(0, len(uniqueLaps)):
             lapViews[uniqueLaps[i]] = data[lapStartIndex[i]:lapStartIndex[i+1]]
+        
+        # Create the lap objects and append them to the dictionary
+        lapsDict = OrderedDict()
+        for i in range(0, len(uniqueLaps)):
+            pass
         
         #--------------------------------------------------------------
 

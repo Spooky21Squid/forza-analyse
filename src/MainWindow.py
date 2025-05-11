@@ -97,30 +97,6 @@ class Session(QObject):
     represents a single unit of time's worth of continuously logged packets saved as a csv file.
     """
 
-    class Lap():
-        """Stores all the important collected and calculated data from a single lap"""
-
-        def __init__(self, lapNumber: int = None, lapTime: int = None,
-                     lapBegin: int = None, data: np.ndarray = None, fastest = False):
-            self.lapNumber: int = lapNumber
-
-            # Uses the last_lap_time parameter from a packet collected from the next lap. This is because the last packet recorded
-            # during a lap will be slightly before the finish line, and so the recorded lap time will be slightly quicker than the
-            # real lap time.
-            # The only problem with this is the last lap will have to use a lap time collected from the last packet. This means the last
-            # lap's lap time will be slightly quicker than real (about 1/60th of a second, or 0.017s). But it's better to have an accurate
-            # lap time for 99% of the laps than to be consistently slightly wrong every lap.
-            self.lapTime: int = lapTime  # In seconds
-
-            self.lapBegin: int = lapBegin  # Time the lap began in seconds relative to the start of the race (cur_race_time)
-            self.fastest: bool = fastest  # True if the fastest lap in session, false if not
-
-            self.data: np.ndarray = data  # A view of the portion of the session data that covers the lap
-
-            #self.inLap: bool = False
-            #self.outLap: bool = False
-
-
     def __init__(self, data: np.ndarray, filePath = pathlib.Path, parent = None):
         super().__init__(parent = parent)
 
@@ -130,7 +106,6 @@ class Session(QObject):
 
         # A structured numpy array containing data about the laps in a session
         self.laps: np.ndarray = None
-        #np.array(dtype=np.dtype([('lap_no', np.int64), ("lap_time", np.float64), ("lap_begin_time", np.float64), ("dist_traveled", np.float64)]))
         self.lapViews = dict()  # A dictionary of laps to numpy views of the data included in the lap, from the Session data
         
         self.trackID: int = None  # The forza-assigned ID of the track
@@ -152,27 +127,13 @@ class Session(QObject):
         the player didn't finish the lap) the lap will not be included but will still be used to improve the previous lap. A *copy* of
         data will be used for the Session."""
 
-        # How to add a new lap -----------------
-        # Get the lap number
-        # Get the following data from the lap's last packet:
-        #   last_lap_time
-        #   cur_lap_time (this lap's lap time)
-        #   dist_traveled
-        # Get this data from the first packet:
-        #   cur_race_time (time the lap began)
-        # If this is the first lap:
-        #   use dist_traveled to assign the distance to a single lap
-        #   use cur_lap_time as the lap's time and the session fastest time
-        # If this lap follows another lap: 
-        #   use last_lap_time to update the previous lap's time and update the session fastest lap time if needed
-
         data = data.copy()
 
         # Get the lap number (If there are many laps, throw exception)
         uniqueLaps, uniqueIndexes = np.unique(data["lap_no"], return_index=True)
         if len(uniqueLaps) > 1:
             raise ValueError("Multiple laps were included in the data array - Couldn't add a lap", uniqueLaps.tolist())
-        currentLapNumber = uniqueLaps[0]
+        currentLapNumber = int(uniqueLaps[0])
 
         # Get info from the last packet
         lastLapTime, curLapTime, distTraveled = data[-1]["last_lap_time"], data[-1]["cur_lap_time"], data[-1]["dist_traveled"]
@@ -186,8 +147,8 @@ class Session(QObject):
         # If this is the first lap (if the laps array is empty), use all the data as it is (no previous lap to edit)
         # and set the track info
         if self.laps is None:
-            self.lapDistance = distTraveled
-            self.trackID = trackID
+            self.lapDistance = float(distTraveled)
+            self.trackID = int(trackID)
             self.laps = currentLapData
         else:
             # Get the previous lap and update the lap time with a more accurate figure from this lap
@@ -237,8 +198,6 @@ class Session(QObject):
         for view in lapViews.values():
             self.addLap(view)
         
-        logging.info("Initialised. Laps: {}".format(self.laps))
-
     def _sortData(data: np.ndarray):
         """Sorts the packet numpy array based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
         by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
@@ -550,7 +509,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # Dialog to get the csv files
         dlg = QtWidgets.QFileDialog(self)
         dlg.setWindowTitle("Open Sessions")
-        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFile)
+        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFiles)
         dlg.setNameFilter("*.csv")
 
         # If user presses okay

@@ -119,7 +119,8 @@ class Session(QObject):
         Session._sortData(data)
         self.initialise(data)
 
-        logging.info("Created Session")
+        logging.info("Created Session {}".format(self.name))
+        logging.info("Fastest Lap: {}".format(self.getFastestLap()))
     
     def addLap(self, data: np.ndarray):
         """Adds a single new lap onto the session, given all the packets collected during that lap. If there are multiple laps
@@ -152,7 +153,6 @@ class Session(QObject):
             self.laps = currentLapData
         else:
             # Get the previous lap and update the lap time with a more accurate figure from this lap
-            print(self.laps)
             prevLap = self.laps[-1]
             prevLap["lap_time"] = lastLapTime
 
@@ -227,6 +227,10 @@ class Session(QObject):
             # Re-sort the array in-place to put those rows after the overflow at the back again
             data.sort(order="timestamp_ms", kind="stable")
 
+    def getFastestLap(self):
+        """Returns the fastest lap time of the session as a numpy float"""
+        fastestLap = self.laps["lap_time"].min()
+        return fastestLap
 
 class LapViewer(QtWidgets.QWidget):
     """Displays a single video widget to the user starting at a specified point in the video, eg. the start of a lap."""

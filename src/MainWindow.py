@@ -240,9 +240,24 @@ class SessionManager(QObject):
     # at once, a signal will be emitted for each one.
     sessionLoaded = pyqtSignal(Session)
 
+    # Emitted when the user focuses or unfocuses a lap
+    focusedLapsChanged = pyqtSignal()
+
     def __init__(self, parent = None):
         super().__init__(parent)
         self.sessions = dict()
+
+        # All the focused laps in a session. Keys are the session name, and the value is a set of all the laps
+        # in focus in that session.
+        self.focusedLaps = dict()
+    
+    def lapFocusToggle(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
+        """Toggles which laps are in focus and displayed in the graphs and video widgets"""
+        if checkState == Qt.CheckState.Checked:
+            self.focusedLaps[sessionName].add(lapNumber)
+        else:
+            self.focusedLaps[sessionName].discard(lapNumber)
+        self.focusedLapsChanged.emit()            
 
     def openSessions(self):
         """Opens and loads the telemetry csv files into the sessions dict"""
@@ -278,8 +293,11 @@ class SessionManager(QObject):
                 tempSessionsDict[fileName] = newSession
 
             self.sessions = tempSessionsDict  # Replace the currently loaded sessions with new ones
-            for s in self.sessions.values():
+            self.focusedLaps.clear()  # Clear the currently focused laps
+            for name, s in self.sessions.items():
                 self.sessionLoaded.emit(s)
+                self.focusedLaps[name] = set()
+            
 
 
 class SessionOverviewWidget(QtWidgets.QWidget):
@@ -627,7 +645,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sessionOverviewWidget.setStatusTip("Session Overview: View the select which laps to focus on from each session.")
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
         self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
-        sessionOverviewWidget.toggleLapFocus.connect(self.testLapToggle)
+        sessionOverviewWidget.toggleLapFocus.connect(self.sessionManager.lapFocusToggle)
 
         # plot widget
         self.plotWidget = MultiPlotWidget()
@@ -647,10 +665,3 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
-    
-    def testLapToggle(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
-        """Tests the lap focus toggle functionality"""
-        if checkState == Qt.CheckState.Checked:
-            logging.info("Checked lap {} in session {}".format(lapNumber, sessionName))
-        else:
-            logging.info("Removed lap {} in session {}".format(lapNumber, sessionName))

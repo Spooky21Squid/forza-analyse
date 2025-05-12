@@ -282,6 +282,46 @@ class SessionManager(QObject):
                 self.sessionLoaded.emit(s)
 
 
+class SessionViewerWidget(QtWidgets.QGroupBox):
+    """Displays data about a single Session"""
+
+    def __init__(self, session: Session, parent = None):
+        super().__init__(title = session.name, parent = parent)
+
+        layout = QtWidgets.QGridLayout()
+        self.setLayout(layout)
+
+        # Add the header
+        layout.addWidget(QtWidgets.QLabel(text="Lap", parent=self), 0, 0)
+        layout.addWidget(QtWidgets.QLabel(text="Show", parent=self), 0, 1)
+        layout.addWidget(QtWidgets.QLabel(text="Lap Time", parent=self), 0, 2)
+
+        row = 1
+        for lap in session.laps:
+            layout.addWidget(QtWidgets.QLabel(text=str(lap["lap_no"]), parent=self), row, 0)
+            layout.addWidget(QtWidgets.QCheckBox(parent=self), row, 1)
+            layout.addWidget(QtWidgets.QLabel(text=str(lap["lap_time"]), parent=self), row, 2)
+
+            row += 1
+
+
+class SessionOverviewWidget(QtWidgets.QWidget):
+    """Displays data about all the currently opened Sessions and all the laps in each Session"""
+
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.sessionTabs = OrderedDict()
+
+        layout = QtWidgets.QVBoxLayout()
+        self.setLayout(layout)
+    
+    def addSession(self, session: Session):
+        """Adds a new session tab to the overview"""
+        tab = SessionViewerWidget(session)
+        self.sessionTabs[session.name] = tab
+        self.layout().addWidget(tab)
+
+
 class LapViewer(QtWidgets.QWidget):
     """Displays a single video widget to the user starting at a specified point in the video, eg. the start of a lap."""
 
@@ -538,6 +578,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
         self.record.statusUpdate.connect(recordStatusWidget.update)
         """
+
+        # Session Data Viewer widget
+        sessionOverviewWidget = SessionOverviewWidget(self)
+
+        sessionScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
+        sessionScrollArea.setWidget(sessionOverviewWidget)
+        sessionScrollArea.setWidgetResizable(True)
+        sessionScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+
+        sessionOverviewDockWidget = QtWidgets.QDockWidget("Session Overview", self)
+        sessionOverviewDockWidget.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        sessionOverviewDockWidget.setWidget(sessionScrollArea)
+        sessionOverviewWidget.setStatusTip("Session Overview: View the select which laps to focus on from each session.")
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
+        self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
 
         # plot widget
         self.plotWidget = MultiPlotWidget()

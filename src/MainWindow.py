@@ -282,43 +282,80 @@ class SessionManager(QObject):
                 self.sessionLoaded.emit(s)
 
 
-class SessionViewerWidget(QtWidgets.QGroupBox):
-    """Displays data about a single Session"""
-
-    def __init__(self, session: Session, parent = None):
-        super().__init__(title = session.name, parent = parent)
-
-        layout = QtWidgets.QGridLayout()
-        self.setLayout(layout)
-
-        # Add the header
-        layout.addWidget(QtWidgets.QLabel(text="Lap", parent=self), 0, 0)
-        layout.addWidget(QtWidgets.QLabel(text="Show", parent=self), 0, 1)
-        layout.addWidget(QtWidgets.QLabel(text="Lap Time", parent=self), 0, 2)
-
-        row = 1
-        for lap in session.laps:
-            layout.addWidget(QtWidgets.QLabel(text=str(lap["lap_no"]), parent=self), row, 0)
-            layout.addWidget(QtWidgets.QCheckBox(parent=self), row, 1)
-            layout.addWidget(QtWidgets.QLabel(text=str(lap["lap_time"]), parent=self), row, 2)
-
-            row += 1
-
-
 class SessionOverviewWidget(QtWidgets.QWidget):
     """Displays data about all the currently opened Sessions and all the laps in each Session"""
 
+    # Emitted when the user wants to toggle focus on a lap (add to the graphs and display the video), by checking the
+    # checkbox. Will emit with the session name as a str, lap number as an int, and whether the user is toggling
+    # on or off, as a CheckState class
+    toggleLapFocus = pyqtSignal(str, int, Qt.CheckState)
+
+
+    class SessionViewerWidget(QtWidgets.QGroupBox):
+        """Displays data about a single Session"""
+
+
+        class LapCheckBox(QtWidgets.QCheckBox):
+            
+            # Emitted when the checkbox is clicked. Contains the lap number as an int, and the checkstate
+            toggleLapFocus = pyqtSignal(int, Qt.CheckState)
+
+            def __init__(self, lapNumber: int, parent = None):
+                super().__init__(parent = parent)
+                self.lapNumber = lapNumber
+                self.stateChanged.connect(self._emitToggleSignal)
+            
+            def _emitToggleSignal(self):
+                self.toggleLapFocus.emit(self.lapNumber, self.checkState())
+
+
+        # Emitted when the user wants to toggle focus on a lap (add to the graphs and display the video), by checking the
+        # checkbox. Will emit with the session name as a str, lap number as an int, and whether the user is toggling
+        # on or off, as a CheckState class
+        toggleLapFocus = pyqtSignal(str, int, Qt.CheckState)
+
+        def __init__(self, session: Session, parent = None):
+            super().__init__(title = session.name, parent = parent)
+
+            self.sessionName = session.name
+
+            layout = QtWidgets.QGridLayout()
+            self.setLayout(layout)
+
+            # Add the header
+            layout.addWidget(QtWidgets.QLabel(text="Lap", parent=self), 0, 0)
+            layout.addWidget(QtWidgets.QLabel(text="Show", parent=self), 0, 1)
+            layout.addWidget(QtWidgets.QLabel(text="Lap Time", parent=self), 0, 2)
+
+            self._row = 1  # The next free row to add a lap into
+            for lap in session.laps:
+                self.addLap(lap)
+        
+        def lapToggled(self, lapNumber: int, checkState: Qt.CheckState):
+            self.toggleLapFocus.emit(self.sessionName, lapNumber, checkState)
+            
+        def addLap(self, lap: np.ndarray):
+            """Adds a new lap as a new row into the viewer widget"""
+            self.layout().addWidget(QtWidgets.QLabel(text=str(lap["lap_no"]), parent=self), self._row, 0)
+            lapCheckBox = SessionOverviewWidget.SessionViewerWidget.LapCheckBox(lap["lap_no"], self)
+            lapCheckBox.toggleLapFocus.connect(self.lapToggled)
+            self.layout().addWidget(lapCheckBox, self._row, 1)
+            self.layout().addWidget(QtWidgets.QLabel(text=str(lap["lap_time"]), parent=self), self._row, 2)
+            self._row += 1
+        
+
     def __init__(self, parent = None):
         super().__init__(parent)
-        self.sessionTabs = OrderedDict()
+        #self.sessionTabs = OrderedDict()
 
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
     
     def addSession(self, session: Session):
         """Adds a new session tab to the overview"""
-        tab = SessionViewerWidget(session)
-        self.sessionTabs[session.name] = tab
+        tab = SessionOverviewWidget.SessionViewerWidget(session)
+        tab.toggleLapFocus.connect(self.toggleLapFocus)
+        #self.sessionTabs[session.name] = tab
         self.layout().addWidget(tab)
 
 
@@ -495,9 +532,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
-        # A dictionary of Session objects to store telemetry from multiple loaded CSV files
-        # Keys are the filename without the extension, and Items are the Session objects
-        self.sessions = dict()
         self.sessionManager = SessionManager(self)
 
         # Central widget ----------------------
@@ -528,7 +562,7 @@ class MainWindow(QtWidgets.QMainWindow):
         stopAction.triggered.connect(self.videoPlayer.stop)
         toolbar.addAction(stopAction)
 
-        # Action to open a new session, to load the telemetry csv file and the associated mp4 video with the same name
+        # Action to open a new session, to load the telemetry csv files and the associated mp4 video with the same name
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
         openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
@@ -543,7 +577,7 @@ class MainWindow(QtWidgets.QMainWindow):
         #recordSessionAction.triggered.connect()
         toolbar.addAction(recordSessionAction)
 
-        # Action to change the record condig settings
+        # Action to change the record config settings
         recordConfigAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Record Config", self)
         recordConfigAction.setShortcut(QKeySequence("Ctrl+S"))
         recordConfigAction.setStatusTip("Record Config: Change the telemetry and video recording settings.")
@@ -593,6 +627,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sessionOverviewWidget.setStatusTip("Session Overview: View the select which laps to focus on from each session.")
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
         self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
+        sessionOverviewWidget.toggleLapFocus.connect(self.testLapToggle)
 
         # plot widget
         self.plotWidget = MultiPlotWidget()
@@ -612,3 +647,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
+    
+    def testLapToggle(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
+        """Tests the lap focus toggle functionality"""
+        if checkState == Qt.CheckState.Checked:
+            logging.info("Checked lap {} in session {}".format(lapNumber, sessionName))
+        else:
+            logging.info("Removed lap {} in session {}".format(lapNumber, sessionName))

@@ -258,13 +258,28 @@ class SessionManager(QObject):
             filePathList = dlg.selectedFiles()
             logging.info("Found Files: {}".format(filePathList))
 
+            tempSessionsDict = dict()
+            loadedTrackID = None
+
             for filePath in filePathList:
                 data = np.genfromtxt(filePath, delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
                 newSession = Session(data, pathlib.Path(filePath).resolve(), self)
                 fileName = pathlib.Path(filePath).resolve().stem
-                self.sessions[fileName] = newSession  # Create a new entry in the sessions dict
-                self.sessionLoaded.emit(newSession)
+                if loadedTrackID is None:
+                    loadedTrackID = newSession.trackID
+                else:
+                    if loadedTrackID != newSession.trackID:
+                        failAlert = QtWidgets.QMessageBox(text="Error: Cannot open data from different tracks. Make sure all telemetry files are from the same track and try again.", parent=self.parent())
+                        failAlert.setWindowTitle("Session Loading Error")
+                        failAlert.exec()
+                        return  # Fail if user is loading data from different tracks
 
+                # Make sure all new sessions are loaded successfully before replacing all currently opened sessions
+                tempSessionsDict[fileName] = newSession
+
+            self.sessions = tempSessionsDict  # Replace the currently loaded sessions with new ones
+            for s in self.sessions.values():
+                self.sessionLoaded.emit(s)
 
 
 class LapViewer(QtWidgets.QWidget):

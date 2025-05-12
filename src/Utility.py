@@ -2,6 +2,7 @@
 
 from PyQt6.QtMultimedia import QCameraFormat
 import socket
+from math import floor
 
 def getIP():
     """Returns the local IP address as a string. If an error is encountered while trying to
@@ -79,4 +80,12 @@ def QCameraFormatToStr(format: QCameraFormat):
         format.resolution().width(), format.resolution().height(),
         format.pixelFormat().name,
         frameRate)
+    return result
+
+def formatLapTime(lapTime: float) -> str:
+    """Formats a lap time as a float type into a readable string format of type MM:ss.mmmm"""
+    minutes, seconds = divmod(lapTime, 60)
+    mseconds = str(seconds - floor(seconds))  # gets us the decimal part
+    mseconds = mseconds[2:5]
+    result = "{}:{}.{}".format(int(minutes), int(seconds), mseconds)
     return result

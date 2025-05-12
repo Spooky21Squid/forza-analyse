@@ -340,7 +340,7 @@ class SessionOverviewWidget(QtWidgets.QWidget):
             lapCheckBox = SessionOverviewWidget.SessionViewerWidget.LapCheckBox(lap["lap_no"], self)
             lapCheckBox.toggleLapFocus.connect(self.lapToggled)
             self.layout().addWidget(lapCheckBox, self._row, 1)
-            self.layout().addWidget(QtWidgets.QLabel(text=str(lap["lap_time"]), parent=self), self._row, 2)
+            self.layout().addWidget(QtWidgets.QLabel(text=Utility.formatLapTime(lap["lap_time"]), parent=self), self._row, 2)
             self._row += 1
         
 

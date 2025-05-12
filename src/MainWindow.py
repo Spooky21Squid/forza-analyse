@@ -232,6 +232,41 @@ class Session(QObject):
         fastestLap = self.laps["lap_time"].min()
         return fastestLap
 
+
+class SessionManager(QObject):
+    """Stores and manages all the currently opened Sessions"""
+
+    # Emitted when a single new session is loaded in through the Session dialog box. If multiple sessions are loaded
+    # at once, a signal will be emitted for each one.
+    sessionLoaded = pyqtSignal(Session)
+
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.sessions = dict()
+
+    def openSessions(self):
+        """Opens and loads the telemetry csv files into the sessions dict"""
+
+        # Dialog to get the csv files
+        dlg = QtWidgets.QFileDialog(self.parent())
+        dlg.setWindowTitle("Open Sessions")
+        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFiles)
+        dlg.setNameFilter("*.csv")
+
+        # If user presses okay
+        if dlg.exec():
+            filePathList = dlg.selectedFiles()
+            logging.info("Found Files: {}".format(filePathList))
+
+            for filePath in filePathList:
+                data = np.genfromtxt(filePath, delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
+                newSession = Session(data, pathlib.Path(filePath).resolve(), self)
+                fileName = pathlib.Path(filePath).resolve().stem
+                self.sessions[fileName] = newSession  # Create a new entry in the sessions dict
+                self.sessionLoaded.emit(newSession)
+
+
+
 class LapViewer(QtWidgets.QWidget):
     """Displays a single video widget to the user starting at a specified point in the video, eg. the start of a lap."""
 
@@ -408,6 +443,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # A dictionary of Session objects to store telemetry from multiple loaded CSV files
         # Keys are the filename without the extension, and Items are the Session objects
         self.sessions = dict()
+        self.sessionManager = SessionManager(self)
 
         # Central widget ----------------------
 
@@ -441,7 +477,7 @@ class MainWindow(QtWidgets.QMainWindow):
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
         openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
-        openSessionAction.triggered.connect(self.openSessions)
+        openSessionAction.triggered.connect(self.sessionManager.openSessions)
         toolbar.addAction(openSessionAction)
 
         # Action to start/stop recording a session (Record UDP data and a video input source)
@@ -506,23 +542,3 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add an action to the menu bar to open/close the dock widgets
         viewMenu.addAction(plotDockWidget.toggleViewAction())
         #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
-    
-    def openSessions(self):
-        """Opens and loads the telemetry csv files into the sessions dict"""
-
-        # Dialog to get the csv files
-        dlg = QtWidgets.QFileDialog(self)
-        dlg.setWindowTitle("Open Sessions")
-        dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFiles)
-        dlg.setNameFilter("*.csv")
-
-        # If user presses okay
-        if dlg.exec():
-            filePathList = dlg.selectedFiles()
-            logging.info("Found Files: {}".format(filePathList))
-
-            for filePath in filePathList:
-                data = np.genfromtxt(filePath, delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
-                newSession = Session(data, pathlib.Path(filePath).resolve(), self)
-                fileName = pathlib.Path(filePath).resolve().stem
-                self.sessions[fileName] = newSession  # Create a new entry in the sessions dict

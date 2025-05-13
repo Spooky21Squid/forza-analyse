@@ -354,9 +354,9 @@ class MultiPlotWidget(QtWidgets.QWidget):
             # Add the plot to the end of the display widget and the dictionary
             plot = MultiPlotWidget.MultiLapPlot(plotType)
 
-            # Link the X-axis to the other plots
-            for plotWidget in self.currentPlots.values():
-                plot.setXLink(plotWidget)
+            # Link the X-axis to the first plot in the dict (Can only link to one plot at a time, but a plot can provide many links)
+            if len(self.currentPlots):
+                plot.setXLink(list(self.currentPlots.values())[0])
 
             # Add all the currently focused laps to the plot
             for sessionName, focusedLaps in self.sessionManager.focusedLaps.items():
@@ -373,7 +373,12 @@ class MultiPlotWidget(QtWidgets.QWidget):
             if plot is not None:
                 # Remove the widget from the layout, and delete it from the plot dictionary
                 self.plotDisplay.layout().removeWidget(plot)
-                self.currentPlots.pop(plotType)  
+                self.currentPlots.pop(plotType)
+
+                # Re-link the X-axis of all the plots
+                if len(self.currentPlots):
+                    for plotWidget in self.currentPlots.values():
+                        plotWidget.setXLink(list(self.currentPlots.values())[0]) 
     
     def toggleLap(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
         """Adds or removes a lap from all the plots"""

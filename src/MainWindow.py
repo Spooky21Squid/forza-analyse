@@ -172,6 +172,9 @@ class SessionManager(QObject):
     # Emitted when the user focuses or unfocuses a lap, and contains the focusedLaps dictionary
     focusedLapsChanged = pyqtSignal(dict)
 
+    # Emitted when a new set of sessions are loaded. Only emitted once per session reset
+    sessionReset = pyqtSignal()
+
     def __init__(self, parent = None):
         super().__init__(parent)
         self.sessions = dict()  # session name (str) : Session object
@@ -223,6 +226,7 @@ class SessionManager(QObject):
 
             self.sessions = tempSessionsDict  # Replace the currently loaded sessions with new ones
             self.focusedLaps.clear()  # Clear the currently focused laps
+            self.sessionReset.emit()
             for name, s in self.sessions.items():
                 self.sessionLoaded.emit(s)
                 self.focusedLaps[name] = set()
@@ -276,6 +280,12 @@ class MultiPlotWidget(QtWidgets.QWidget):
             # Add a checkbox for each plot type
             for plotType, checkBox in self.plotDict.items():
                 self.l.addRow(plotType, checkBox)
+        
+        def reset(self):
+            """Resets all the checkboxes and clears dictionaries"""
+            self.displayedPlots.clear()
+            for checkBox in self.plotDict.values():
+                checkBox.setCheckState(Qt.CheckState.Unchecked)
     
 
     class PlotDisplay(QtWidgets.QWidget):
@@ -399,6 +409,18 @@ class MultiPlotWidget(QtWidgets.QWidget):
         
         return (distanceCopy, yValues)
     
+    def reset(self):
+        """Resets the plot widget - removes any displayed plots and unchecks the plot controller checkboxes"""
+        
+        # Remove the plot widgets from the layout and from the dictionary
+        for plot in self.currentPlots.values():
+            self.plotDisplay.layout().removeWidget(plot)
+        self.currentPlots.clear()
+
+        # Reset the checkboxes
+        self.controller.reset()
+
+
     def _update(self, data: np.ndarray):
         """Creates new plots from the new session telemetry data, but doesn't display them right away"""
         self.data = data
@@ -501,17 +523,22 @@ class SessionOverviewWidget(QtWidgets.QWidget):
 
     def __init__(self, parent = None):
         super().__init__(parent)
-        #self.sessionTabs = OrderedDict()
-
+        self.openSessions = dict()  # Session Name (str) : Session tab (SessionViewerWidget)
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
     
     def addSession(self, session: Session):
-        """Adds a new session tab to the overview"""
+        """Adds a new session to the overview"""
         tab = SessionOverviewWidget.SessionViewerWidget(session)
         tab.toggleLapFocus.connect(self.toggleLapFocus)
-        #self.sessionTabs[session.name] = tab
+        self.openSessions[session.name] = tab
         self.layout().addWidget(tab)
+    
+    def reset(self):
+        """Resets the widget and clears the displayed sessions"""
+        for sessionTab in self.openSessions.values():
+            self.layout().removeWidget(sessionTab)
+        self.openSessions.clear()
 
 
 class LapViewer(QtWidgets.QWidget):
@@ -783,10 +810,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
         self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
         sessionOverviewWidget.toggleLapFocus.connect(self.sessionManager.lapFocusToggle)
+        self.sessionManager.sessionReset.connect(sessionOverviewWidget.reset)
 
         # plot widget
         self.plotWidget = MultiPlotWidget(self.sessionManager)
         sessionOverviewWidget.toggleLapFocus.connect(self.plotWidget.toggleLap)
+        self.sessionManager.sessionReset.connect(self.plotWidget.reset)
 
         plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
         plotDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)

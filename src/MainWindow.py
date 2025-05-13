@@ -354,6 +354,10 @@ class MultiPlotWidget(QtWidgets.QWidget):
             # Add the plot to the end of the display widget and the dictionary
             plot = MultiPlotWidget.MultiLapPlot(plotType)
 
+            # Link the X-axis to the other plots
+            for plotWidget in self.currentPlots.values():
+                plot.setXLink(plotWidget)
+
             # Add all the currently focused laps to the plot
             for sessionName, focusedLaps in self.sessionManager.focusedLaps.items():
                 for lapNumber in focusedLaps:

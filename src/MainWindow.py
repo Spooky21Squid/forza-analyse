@@ -495,6 +495,7 @@ class SessionOverviewWidget(QtWidgets.QWidget):
             super().__init__(title = session.name, parent = parent)
 
             self.sessionName = session.name
+            self.lapCheckBoxes = []  # A list of all the LapCheckBox widgets
 
             layout = QtWidgets.QGridLayout()
             self.setLayout(layout)
@@ -515,6 +516,7 @@ class SessionOverviewWidget(QtWidgets.QWidget):
             """Adds a new lap as a new row into the viewer widget"""
             self.layout().addWidget(QtWidgets.QLabel(text=str(lap["lap_no"]), parent=self), self._row, 0)
             lapCheckBox = SessionOverviewWidget.SessionViewerWidget.LapCheckBox(lap["lap_no"], self)
+            self.lapCheckBoxes.append(lapCheckBox)
             lapCheckBox.toggleLapFocus.connect(self.lapToggled)
             self.layout().addWidget(lapCheckBox, self._row, 1)
             self.layout().addWidget(QtWidgets.QLabel(text=Utility.formatLapTime(lap["lap_time"]), parent=self), self._row, 2)
@@ -524,13 +526,15 @@ class SessionOverviewWidget(QtWidgets.QWidget):
     def __init__(self, parent = None):
         super().__init__(parent)
         self.openSessions = dict()  # Session Name (str) : Session tab (SessionViewerWidget)
+        self.focusedLapsNumber = 0  # Number of currently focused laps
+
         layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
     
     def addSession(self, session: Session):
         """Adds a new session to the overview"""
         tab = SessionOverviewWidget.SessionViewerWidget(session)
-        tab.toggleLapFocus.connect(self.toggleLapFocus)
+        tab.toggleLapFocus.connect(self._toggleLapFunction)
         self.openSessions[session.name] = tab
         self.layout().addWidget(tab)
     
@@ -539,6 +543,28 @@ class SessionOverviewWidget(QtWidgets.QWidget):
         for sessionTab in self.openSessions.values():
             self.layout().removeWidget(sessionTab)
         self.openSessions.clear()
+    
+    def _toggleLapFunction(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
+        """Sends a signal that a lap has been toggled, and enables/disables the checkboxes if the maximum focused laps have been reached"""
+
+        self.toggleLapFocus.emit(sessionName, lapNumber, checkState)
+
+        if checkState is Qt.CheckState.Checked:
+            self.focusedLapsNumber += 1
+            if self.focusedLapsNumber == 6:  # Max focused laps have been reached
+                # Disable all the unchecked checkboxes
+                for sessionWidget in self.openSessions.values():
+                    for checkBox in sessionWidget.lapCheckBoxes:
+                        if checkBox.checkState() is Qt.CheckState.Unchecked:
+                            checkBox.setEnabled(False)
+        else:
+            if self.focusedLapsNumber == 6:
+                # Enable all the checkboxes
+                for sessionWidget in self.openSessions.values():
+                    for checkBox in sessionWidget.lapCheckBoxes:
+                        checkBox.setEnabled(True)
+
+            self.focusedLapsNumber -= 1
 
 
 class LapViewer(QtWidgets.QWidget):

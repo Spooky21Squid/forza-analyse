@@ -4,6 +4,37 @@ from PyQt6.QtMultimedia import QCameraFormat
 import socket
 from math import floor
 
+class ColourPicker():
+    """A class to manage the use of the 6 primary colours through their Hue values"""
+
+    def __init__(self):
+        self.available = list(0, 60, 120, 180, 240, 300)  # Maintains order from lowest to highest hue
+
+    def pick(self):
+        """Picks a new colour that isn't already being used. Will always pick the lowest available Hue. Raises IndexError if there
+        are no more colours to pick from."""
+        hue = self.available.pop(0)
+        return hue
+
+    def putBack(self, hue: int):
+        """Puts back a colour to be used again. Raises a ValueError if an invalid colour value (hue) is given (Eg. The value was not
+        a primary colour). Does nothing if the colour to be put back was already available to use."""
+
+        if hue > 300 or hue < 0 or hue % 60 != 0:
+            raise ValueError("Tried to put back invalid Hue: {}".format(hue))
+        
+        if hue in self.available:
+            return
+
+        # Just use o(n) insert - there's only 6 elements
+        index = 0
+        while index < len(self.available):
+            if self.available[index] > hue:
+                self.available.insert(index)
+                return
+        self.available.append(hue)
+        
+
 def getIP():
     """Returns the local IP address as a string. If an error is encountered while trying to
     establish a connection, it will return None."""

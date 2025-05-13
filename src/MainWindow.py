@@ -19,77 +19,6 @@ import socket
 from enum import Enum
 from collections import OrderedDict
 
-"""
-Currently:
-- working on Session.update: Need to:
-    - Remove all the rows of data at the beginning of the data ndarray that have negative distance (all the data points
-    collected before the player has crossed the start line) (Do this when creating the ndarray from the csv file)
-    - Create a Lap object for each lap in the session that includes:
-        - Distance traveled
-        - Lap time
-        - best lap boolean (True if best lap)
-        - In lap boolean (if tyres change wear)
-        - Out lap boolean (if tyres change wear)
-        and more...
-- When session is updated, initialise the graph widget with a speed over distance graph
-"""
-
-
-class MultiPlotWidget(QtWidgets.QWidget):
-    """Displays multiple telemetry plots generated from the session telemetry data"""
-
-    def __init__(self):
-        super().__init__()
-
-        # Contains all the plots currently displayed in the layout
-        self.plots = dict()
-        self.data = None  # The numpy telemetry data
-
-        self.lt = QtWidgets.QVBoxLayout()
-        self.setLayout(self.lt)
-    
-    @pyqtSlot(np.ndarray)
-    def update(self, data: np.ndarray):
-        """Creates new plots from the new session telemetry data, but doesn't display them right away"""
-        self.data = data
-
-        self.addNewPlot("time", "cur_lap_time")
-        self.addNewPlot("dist_traveled", "speed")
-        self.addNewPlot("dist_traveled", "steer")
-
-        t = self.plots["cur_lap_time"].getPlotItem().getViewBox()
-        u = self.plots["speed"].getPlotItem().getViewBox()
-        v = self.plots["steer"].getPlotItem().getViewBox()
-
-        v.setXLink(t)
-
-    def addNewPlot(self, x: str, y: str):
-        """
-        Adds a new plot to the layout
-        
-        Parameters
-        ----------
-        x : The parameter to assign to the x axis, eg. dist_traveled
-        y : The parameter to assign to the y axis, eg. speed
-        """
-        
-        xAxis = self.data[x]
-        newPlot = pg.plot(title = y)
-        newPlot.setMinimumHeight(300)
-        logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
-        yAxis = self.data[y]
-        newPlot.plot(xAxis, yAxis)
-
-        vLine = pg.InfiniteLine(angle=90, movable=False)  # Player head
-        newPlot.addItem(vLine, ignoreBounds = True)
-
-        self.plots[y] = newPlot
-        self.lt.addWidget(newPlot)
-    
-    def movePlayerHead(position):
-        """Moves the vertical line of the graphs"""
-        pass
-
 
 class Session(QObject):
     """
@@ -240,12 +169,12 @@ class SessionManager(QObject):
     # at once, a signal will be emitted for each one.
     sessionLoaded = pyqtSignal(Session)
 
-    # Emitted when the user focuses or unfocuses a lap
-    focusedLapsChanged = pyqtSignal()
+    # Emitted when the user focuses or unfocuses a lap, and contains the focusedLaps dictionary
+    focusedLapsChanged = pyqtSignal(dict)
 
     def __init__(self, parent = None):
         super().__init__(parent)
-        self.sessions = dict()
+        self.sessions = dict()  # session name (str) : Session object
 
         # All the focused laps in a session. Keys are the session name, and the value is a set of all the laps
         # in focus in that session.
@@ -257,7 +186,7 @@ class SessionManager(QObject):
             self.focusedLaps[sessionName].add(lapNumber)
         else:
             self.focusedLaps[sessionName].discard(lapNumber)
-        self.focusedLapsChanged.emit()            
+        self.focusedLapsChanged.emit(self.focusedLaps)            
 
     def openSessions(self):
         """Opens and loads the telemetry csv files into the sessions dict"""
@@ -297,7 +226,215 @@ class SessionManager(QObject):
             for name, s in self.sessions.items():
                 self.sessionLoaded.emit(s)
                 self.focusedLaps[name] = set()
+
+
+class MultiPlotWidget(QtWidgets.QWidget):
+    """Displays multiple telemetry plots generated from the session telemetry data. Each plot will correspond with either
+    a parameter from the Forza data packet, or a calculated parameter such as delta. The parameter will be the Y axis, and
+    the X axis will always be lap distance. A 'player head' will be visible in each plot, indicating which part of the plot
+    the lap video viewer is looking at."""
+
+
+    class PlotController(QtWidgets.QWidget):
+        """A widget to control which plots are displayed"""
+
+
+        class PlotCheckBox(QtWidgets.QCheckBox):
             
+            # Emitted when the checkbox is clicked. Contains the plot type as a str, and the checkstate
+            toggleFocus = pyqtSignal(str, Qt.CheckState)
+
+            def __init__(self, plotType: str, parent = None):
+                super().__init__(parent = parent)
+                self.plotType = plotType
+                self.stateChanged.connect(self._emitToggleSignal)
+            
+            def _emitToggleSignal(self):
+                self.toggleFocus.emit(self.plotType, self.checkState())
+
+
+        # Emitted when the user select a plot to add or remove
+        togglePlot = pyqtSignal(str, Qt.CheckState)
+
+        def __init__(self, customPlotList, parent = None):
+            super().__init__(parent)
+            self.displayedPlots = OrderedDict()  # Just using the keys to act like an ordered set. Each key is a plot type
+            self.l = QtWidgets.QFormLayout()
+            self.setLayout(self.l)
+
+            # All the possible plot types formed of custom calculated plots, and the Forza parameters
+            self.plotTypes = customPlotList
+            self.plotTypes += Utility.ForzaSettings.params
+
+            # Dictionary of all plot types to checkboxes so user can choose to add plots
+            self.plotDict = dict()
+            for plotType in self.plotTypes:
+                checkBox = MultiPlotWidget.PlotController.PlotCheckBox(plotType=plotType)
+                checkBox.toggleFocus.connect(self.togglePlot)
+                self.plotDict[plotType] = checkBox
+
+            # Add a checkbox for each plot type
+            for plotType, checkBox in self.plotDict.items():
+                self.l.addRow(plotType, checkBox)
+    
+
+    class PlotDisplay(QtWidgets.QWidget):
+        """A widget that displays all the plots"""
+
+        def __init__(self, parent = None):
+            super().__init__(parent)
+
+            self.lt = QtWidgets.QVBoxLayout()
+            self.setLayout(self.lt)
+
+
+    class MultiLapPlot(pg.PlotWidget):
+        
+        def __init__(self, title: str, parent=None, background='default', plotItem=None, **kargs):
+            super().__init__(parent, background, plotItem, title=title, **kargs)
+            self.lines = dict()  # (sessionName, Lap Number) : Line
+        
+        def addLap(self, sessionName: str, lapNumber: int, xValues: np.ndarray, yValues: np.ndarray, hue: int = 0):
+            """Adds a new line onto the plot displaying values from a single lap"""
+
+            if self.lines.get((sessionName, lapNumber)) == None:  # Don't add if it's already in the plot
+                pen = pg.mkPen(color=(hue, 255, 255))
+                line = self.plot(xValues, yValues, pen=pen)
+                self.lines[(sessionName, lapNumber)] = line
+
+        def removeLap(self, sessionName: str, lapNumber: int):
+            """Removes a single line from the plot associated with a single lap"""
+
+            line = self.lines.get((sessionName, lapNumber))
+            if line is not None:
+                self.removeItem(line)
+                self.lines.pop((sessionName, lapNumber))
+
+
+    def __init__(self, sessionManager: SessionManager):
+        super().__init__()
+
+        self.customPlotTypes = ["delta"]
+        self.currentPlots = OrderedDict()  # Dictionary of plotType: str to PlotWidget objects
+
+        self.controller = MultiPlotWidget.PlotController(self.customPlotTypes)
+        self.controller.togglePlot.connect(self.togglePlot)
+        self.plotDisplay = MultiPlotWidget.PlotDisplay()
+        self.sessionManager = sessionManager  # So the plots can access the session data
+
+        controllerScrollArea = QtWidgets.QScrollArea()
+        controllerScrollArea.setWidget(self.controller)
+        controllerScrollArea.setWidgetResizable(True)
+        controllerScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+
+        plotScrollArea = QtWidgets.QScrollArea()
+        plotScrollArea.setWidget(self.plotDisplay)
+        plotScrollArea.setWidgetResizable(True)
+        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+
+        layout = QtWidgets.QHBoxLayout()
+        layout.addWidget(controllerScrollArea, 0)
+        layout.addWidget(plotScrollArea, 1)
+        self.setLayout(layout)
+    
+    def togglePlot(self, plotType: str, checkState: Qt.CheckState):
+        """Displays or removes a plot from the display widget. All currently focused laps will appear as lines in the plot."""
+        
+        if checkState == Qt.CheckState.Checked:
+            # Add the plot to the end of the display widget and the dictionary
+            plot = MultiPlotWidget.MultiLapPlot(plotType)
+
+            # Add all the currently focused laps to the plot
+            for sessionName, focusedLaps in self.sessionManager.focusedLaps.items():
+                for lapNumber in focusedLaps:
+                    xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
+                    plot.addLap(sessionName, lapNumber, xValues, yValues)
+                
+            plot.setMinimumHeight(300)
+            self.currentPlots[plotType] = plot
+            self.plotDisplay.layout().addWidget(plot)
+        else:
+            # Remove the plot
+            plot = self.currentPlots.get(plotType)
+            if plot is not None:
+                # Remove the widget from the layout, and delete it from the plot dictionary
+                self.plotDisplay.layout().removeWidget(plot)
+                self.currentPlots.pop(plotType)  
+    
+    def toggleLap(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
+        """Adds or removes a lap from all the plots"""
+        
+        if checkState == Qt.CheckState.Checked:
+            # Add the lap to all the currently displayed plots
+            for plotType, plotWidget in self.currentPlots.items():
+                xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
+                plotWidget.addLap(sessionName, lapNumber, xValues, yValues)
+        else:
+            # Remove the lap from all the currently displayed plots
+            for plot in self.currentPlots.values():
+                plot.removeLap(sessionName, lapNumber)
+    
+    def _getLapData(self, plotType: str, sessionName: str, lapNumber: int):
+        """Returns a tuple of the x and y values as numpy arrays of the lap data for a specified plot type. Eg. if the plot type was 'speed',
+        this will return (x-values, y-values) where x-values is a numpy array containing the distance traveled that lap, and y-values is
+        a numpy array containing the speed values."""
+
+        # Get the lap data from the correct session
+        lapView = self.sessionManager.sessions[sessionName].lapViews[lapNumber]
+        distanceCopy = lapView["dist_traveled"].copy()  # Copied so the values can be normalise without affecting the original data
+        yValues = None
+
+        # Normalise the dist_traveled for each entry so that it always starts at 0, allowing the
+        # laps to sit on top of each other in the plot
+        if lapNumber > 0:  # Lap 0 does not need to be normalised
+            startDistance = distanceCopy[0]
+            for i in range(0, len(distanceCopy)):
+                distanceCopy[i] -= startDistance
+        
+        if plotType in Utility.ForzaSettings.params:
+            yValues = lapView[plotType]
+        else:
+            # Fill yValues with the calculate values
+            yValues = []
+        
+        return (distanceCopy, yValues)
+    
+    def _update(self, data: np.ndarray):
+        """Creates new plots from the new session telemetry data, but doesn't display them right away"""
+        self.data = data
+
+        self.addNewPlot("time", "cur_lap_time")
+        self.addNewPlot("dist_traveled", "speed")
+        self.addNewPlot("dist_traveled", "steer")
+
+        t = self.plots["cur_lap_time"].getPlotItem().getViewBox()
+        u = self.plots["speed"].getPlotItem().getViewBox()
+        v = self.plots["steer"].getPlotItem().getViewBox()
+
+        v.setXLink(t)
+
+    def _addNewPlot(self, x: str, y: str):
+        """
+        Adds a new plot to the layout
+        
+        Parameters
+        ----------
+        x : The parameter to assign to the x axis, eg. dist_traveled
+        y : The parameter to assign to the y axis, eg. speed
+        """
+        
+        xAxis = self.data[x]
+        newPlot = pg.plot(title = y)
+        newPlot.setMinimumHeight(300)
+        logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
+        yAxis = self.data[y]
+        newPlot.plot(xAxis, yAxis)
+
+        vLine = pg.InfiniteLine(angle=90, movable=False)  # Player head
+        newPlot.addItem(vLine, ignoreBounds = True)
+
+        self.plots[y] = newPlot
+        self.lt.addWidget(newPlot)
 
 
 class SessionOverviewWidget(QtWidgets.QWidget):
@@ -648,17 +785,12 @@ class MainWindow(QtWidgets.QMainWindow):
         sessionOverviewWidget.toggleLapFocus.connect(self.sessionManager.lapFocusToggle)
 
         # plot widget
-        self.plotWidget = MultiPlotWidget()
-        #self.session.updated.connect(self.plotWidget.update)
-
-        plotScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
-        plotScrollArea.setWidget(self.plotWidget)
-        plotScrollArea.setWidgetResizable(True)
-        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.plotWidget = MultiPlotWidget(self.sessionManager)
+        sessionOverviewWidget.toggleLapFocus.connect(self.plotWidget.toggleLap)
 
         plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
         plotDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
-        plotDockWidget.setWidget(plotScrollArea)
+        plotDockWidget.setWidget(self.plotWidget)
         plotDockWidget.setStatusTip("Telemetry plot: Displays the telemetry data from the session.")
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, plotDockWidget)
 

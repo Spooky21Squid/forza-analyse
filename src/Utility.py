@@ -8,9 +8,14 @@ class ColourPicker():
     """A class to manage the use of the 6 primary colours through their Hue values"""
 
     def __init__(self):
-        self.available = list(0, 60, 120, 180, 240, 300)  # Maintains order from lowest to highest hue
+        self.available = [] # List of hues that maintains order from lowest to highest hue
+        self._populate()
 
-    def pick(self):
+    def _populate(self):
+        """Populates the available hues list"""
+        self.available = [0, 60, 120, 180, 240, 300]
+
+    def pick(self) -> int:
         """Picks a new colour that isn't already being used. Will always pick the lowest available Hue. Raises IndexError if there
         are no more colours to pick from."""
         hue = self.available.pop(0)
@@ -30,10 +35,15 @@ class ColourPicker():
         index = 0
         while index < len(self.available):
             if self.available[index] > hue:
-                self.available.insert(index)
+                self.available.insert(index, hue)
                 return
+            index += 1
         self.available.append(hue)
-        
+
+    def reset(self):
+        """Resets the colour picker"""
+        self._populate()
+
 
 def getIP():
     """Returns the local IP address as a string. If an error is encountered while trying to

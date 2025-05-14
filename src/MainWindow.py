@@ -1,6 +1,6 @@
 from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
-from PyQt6.QtGui import QAction, QIcon, QKeySequence
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
@@ -179,16 +179,20 @@ class SessionManager(QObject):
         super().__init__(parent)
         self.sessions = dict()  # session name (str) : Session object
 
-        # All the focused laps in a session. Keys are the session name, and the value is a set of all the laps
-        # in focus in that session.
+        # All the focused laps in a session, and their Hue. Keys are the session name, and each value is
+        # another dictionary of focused lap numbers to Hues in that session
         self.focusedLaps = dict()
+
+        self.colourPicker = Utility.ColourPicker()
     
     def lapFocusToggle(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
         """Toggles which laps are in focus and displayed in the graphs and video widgets"""
         if checkState == Qt.CheckState.Checked:
-            self.focusedLaps[sessionName].add(lapNumber)
+            lapHue = self.colourPicker.pick()
+            self.focusedLaps[sessionName][lapNumber] = lapHue
         else:
-            self.focusedLaps[sessionName].discard(lapNumber)
+            lapHue = self.focusedLaps[sessionName].pop(lapNumber)
+            self.colourPicker.putBack(lapHue)
         self.focusedLapsChanged.emit(self.focusedLaps)            
 
     def openSessions(self):
@@ -229,7 +233,8 @@ class SessionManager(QObject):
             self.sessionReset.emit()
             for name, s in self.sessions.items():
                 self.sessionLoaded.emit(s)
-                self.focusedLaps[name] = set()
+                self.focusedLaps[name] = dict()
+                self.colourPicker.reset()
 
 
 class MultiPlotWidget(QtWidgets.QWidget):
@@ -308,7 +313,9 @@ class MultiPlotWidget(QtWidgets.QWidget):
             """Adds a new line onto the plot displaying values from a single lap"""
 
             if self.lines.get((sessionName, lapNumber)) == None:  # Don't add if it's already in the plot
-                pen = pg.mkPen(color=(hue, 255, 255))
+                colour = QColor()
+                colour.setHsv(hue, 255, 255)
+                pen = pg.mkPen(colour)
                 line = self.plot(xValues, yValues, pen=pen)
                 self.lines[(sessionName, lapNumber)] = line
 
@@ -359,10 +366,11 @@ class MultiPlotWidget(QtWidgets.QWidget):
                 plot.setXLink(list(self.currentPlots.values())[0])
 
             # Add all the currently focused laps to the plot
-            for sessionName, focusedLaps in self.sessionManager.focusedLaps.items():
-                for lapNumber in focusedLaps:
+            for sessionName, focusedLapsDict in self.sessionManager.focusedLaps.items():
+                for lapNumber, hue in focusedLapsDict.items():
                     xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
-                    plot.addLap(sessionName, lapNumber, xValues, yValues)
+                    logging.info("Adding lap {} with hue {}".format(lapNumber, hue))
+                    plot.addLap(sessionName, lapNumber, xValues, yValues, hue)
                 
             plot.setMinimumHeight(300)
             self.currentPlots[plotType] = plot
@@ -385,9 +393,10 @@ class MultiPlotWidget(QtWidgets.QWidget):
         
         if checkState == Qt.CheckState.Checked:
             # Add the lap to all the currently displayed plots
+            lapHue = self.sessionManager.focusedLaps[sessionName][lapNumber]
             for plotType, plotWidget in self.currentPlots.items():
                 xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
-                plotWidget.addLap(sessionName, lapNumber, xValues, yValues)
+                plotWidget.addLap(sessionName, lapNumber, xValues, yValues, lapHue)
         else:
             # Remove the lap from all the currently displayed plots
             for plot in self.currentPlots.values():

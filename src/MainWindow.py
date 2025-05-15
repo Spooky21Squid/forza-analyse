@@ -6,6 +6,7 @@ from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 import pyqtgraph as pg
 import numpy as np
+import pandas as pd
 
 from fdp import ForzaDataPacket
 import Utility
@@ -18,6 +19,7 @@ import select
 import socket
 from enum import Enum
 from collections import OrderedDict
+from abc import ABC, abstractmethod
 
 
 class Session(QObject):
@@ -26,174 +28,29 @@ class Session(QObject):
     represents a single unit of time's worth of continuously logged packets saved as a csv file.
     """
 
-    def __init__(self, data: np.ndarray, filePath = pathlib.Path, parent = None):
+    def __init__(self, data: pd.DataFrame, name: str, parent = None):
         super().__init__(parent = parent)
+        self.data: pd.DataFrame = None  # The pandas DataFrame containing the data from the telemetry file
+        self.name = name  # The name for the session
 
-        # Contains all the Lap objects generated from the telemetry, in order from lap 0 to lap n or lap n - 1.
-        # Lap n may or may not be included, depending on if the user finishes it (like in a lapped race) or if
-        # they quit in the middle (like in free practice).
-
-        # A structured numpy array containing data about the laps in a session
-        self.laps: np.ndarray = None
-        self.lapViews = dict()  # A dictionary of laps to numpy views of the data included in the lap, from the Session data
-        
-        self.trackID: int = None  # The forza-assigned ID of the track
-        self.lapDistance: int = None  # The distance over a single lap, calculated at the end of the first lap
-
-        self.data: np.ndarray = None  # The entire data of a session
-        self.filePath = filePath  # A pathlib.Path object
-        self.name = str(filePath.stem)  # Name of the session, equal to the name of the file
-
-        # Sort the data and initialise the Session object
-        Session._sortData(data)
-        self.initialise(data)
-
-        logging.info("Created Session {}".format(self.name))
-        logging.info("Fastest Lap: {}".format(self.getFastestLap()))
+        self.addData(data = data)
     
-    def addLap(self, data: np.ndarray):
-        """Adds a single new lap onto the session, given all the packets collected during that lap. If there are multiple laps
-        included in data, it will throw an exception. If the lap isn't complete (ie. the dist_traveled is too short, meaning
-        the player didn't finish the lap) the lap will not be included but will still be used to improve the previous lap. A *copy* of
-        data will be used for the Session."""
-
-        data = data.copy()
-
-        # Get the lap number (If there are many laps, throw exception)
-        uniqueLaps, uniqueIndexes = np.unique(data["lap_no"], return_index=True)
-        if len(uniqueLaps) > 1:
-            raise ValueError("Multiple laps were included in the data array - Couldn't add a lap", uniqueLaps.tolist())
-        currentLapNumber = int(uniqueLaps[0])
-
-        # Get info from the last packet
-        lastLapTime, curLapTime, distTraveled = data[-1]["last_lap_time"], data[-1]["cur_lap_time"], data[-1]["dist_traveled"]
-
-        # Get info from the first packet
-        lapBegin, trackID = data[0]["cur_race_time"], data[0]["track_ordinal"]
-
-        # Create the lap
-        currentLapData = np.array([(currentLapNumber, curLapTime, lapBegin, distTraveled)], dtype=np.dtype([("lap_no", "i8"), ("lap_time", "f8"), ("lap_begin_time", "f8"), ("dist_traveled", "f8")]))
-
-        # If this is the first lap (if the laps array is empty), use all the data as it is (no previous lap to edit)
-        # and set the track info
-        if self.laps is None:
-            self.lapDistance = float(distTraveled)
-            self.trackID = int(trackID)
-            self.laps = currentLapData
-        else:
-            # Get the previous lap and update the lap time with a more accurate figure from this lap
-            prevLap = self.laps[-1]
-            prevLap["lap_time"] = lastLapTime
-
-            # Decide if this lap is a complete lap or not
-            currentLapDistance = distTraveled - prevLap["dist_traveled"]
-            tolerance = 3  # lap should be within the the first lap's distance +/- tolerance in metres
-            if currentLapDistance > self.lapDistance - tolerance and currentLapDistance < self.lapDistance + tolerance:
-                self.laps = np.hstack((self.laps, currentLapData))
-        
-        # Update the Session's data array with the new lap's data
-        if self.data is not None:
-            self.data = np.hstack((self.data, data))
-        else:
-            self.data = data
-        
-        # Update the Session's individual lap views after the Session's data array
-        self.updateLapViews()
-        
-    def updateLapViews(self):
-        """Updates the lapViews dictionary when the Session is updated with a new lap"""
-        
-        # Separate the Session data into views for each lap
-        self.lapViews.clear()
-        uniqueLaps, lapStartIndex = np.unique(self.data["lap_no"], return_index=True)
-        lapStartIndex = np.append(lapStartIndex, [len(self.data)])
-
-        # Create a new view by slicing the data array
-        for i in range(0, len(uniqueLaps)):
-            self.lapViews[uniqueLaps[i]] = self.data[lapStartIndex[i]:lapStartIndex[i+1]]
-    
-    def initialise(self, data: np.ndarray):
-        """Initialises the Session object from pre-recorded telemetry data"""
-
-        # Separate the data into views for each unique lap
-        lapViews = OrderedDict()
-        uniqueLaps, lapStartIndex = np.unique(data["lap_no"], return_index=True)
-        lapStartIndex = np.append(lapStartIndex, [len(data)])
-
-        for i in range(0, len(uniqueLaps)):
-            lapViews[uniqueLaps[i]] = data[lapStartIndex[i]:lapStartIndex[i+1]]
-        
-        # For each lap view, create a lap entry and add it to the session object
-        for view in lapViews.values():
-            self.addLap(view)
-        
-    def _sortData(data: np.ndarray):
-        """Sorts the packet numpy array based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
-        by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
-        can overflow after about 50 days. This will detect an overflow and re-sort the fields to restore true chronological order."""
-
-        threshold = 3600000  # If the gap between adjacent timestamps is larger than this, an overflow has occurred (3600000ms is about an hour)
-        #threshold = 1000  # For testing
-        data.sort(order="timestamp_ms", kind="stable")  # First in-place sort to remove UDP unreliability
-
-        # Iterate through array and try to detect an overflow
-        overflowIndex = -1
-        for i in range(1, len(data["timestamp_ms"])):
-            if data["timestamp_ms"][i] - data["timestamp_ms"][i - 1] > threshold:
-                overflowIndex = i
-                break
-        
-        # If the overflow index has changed, meaning an overflow has been detected at this index:
-        if overflowIndex != -1:
-
-            # Find the max value for timestamp_ms (Should be at the end)
-            maxTimestamp = data["timestamp_ms"].max()
-
-            # Add the max value + 1 to each of the timestamps after the overflow
-            for i in range(0, overflowIndex):
-                data["timestamp_ms"][i] += maxTimestamp + 1
-            
-            # Re-sort the array in-place to put those rows after the overflow at the back again
-            data.sort(order="timestamp_ms", kind="stable")
-
-    def getFastestLap(self):
-        """Returns the fastest lap time of the session as a numpy float"""
-        fastestLap = self.laps["lap_time"].min()
-        return fastestLap
+    def addData(self, data: pd.DataFrame):
+        """Updates the Session with new data from a pandas DataFrame. This expects that the data is from a single track only, and
+        collected from a single uninterrupted sequence of laps (eg. the user did not restart in the middle of a session)"""
+        self.data = data
 
 
 class SessionManager(QObject):
     """Stores and manages all the currently opened Sessions"""
 
-    # Emitted when a single new session is loaded in through the Session dialog box. If multiple sessions are loaded
-    # at once, a signal will be emitted for each one.
-    sessionLoaded = pyqtSignal(Session)
-
-    # Emitted when the user focuses or unfocuses a lap, and contains the focusedLaps dictionary
-    focusedLapsChanged = pyqtSignal(dict)
-
-    # Emitted when a new set of sessions are loaded. Only emitted once per session reset
-    sessionReset = pyqtSignal()
-
-    def __init__(self, parent = None):
+    def __init__(self, trackDetails: pd.DataFrame, parent = None):
         super().__init__(parent)
-        self.sessions = dict()  # session name (str) : Session object
 
-        # All the focused laps in a session, and their Hue. Keys are the session name, and each value is
-        # another dictionary of focused lap numbers to Hues in that session
-        self.focusedLaps = dict()
+        self.trackDetails = trackDetails
 
-        self.colourPicker = Utility.ColourPicker()
-    
-    def lapFocusToggle(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
-        """Toggles which laps are in focus and displayed in the graphs and video widgets"""
-        if checkState == Qt.CheckState.Checked:
-            lapHue = self.colourPicker.pick()
-            self.focusedLaps[sessionName][lapNumber] = lapHue
-        else:
-            lapHue = self.focusedLaps[sessionName].pop(lapNumber)
-            self.colourPicker.putBack(lapHue)
-        self.focusedLapsChanged.emit(self.focusedLaps)            
+        # A dictionary of currently opened Sessions. Each key is a session name as a string, and each value is a Session object
+        self.sessions = dict()
 
     def openSessions(self):
         """Opens and loads the telemetry csv files into the sessions dict"""
@@ -209,272 +66,93 @@ class SessionManager(QObject):
             filePathList = dlg.selectedFiles()
             logging.info("Found Files: {}".format(filePathList))
 
-            tempSessionsDict = dict()
-            loadedTrackID = None
-
             for filePath in filePathList:
-                data = np.genfromtxt(filePath, delimiter=",", names=True)  # Numpy loads the csv file into a numpy array
-                newSession = Session(data, pathlib.Path(filePath).resolve(), self)
+                # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
+                data = pd.read_csv(filePath)
                 fileName = pathlib.Path(filePath).resolve().stem
-                if loadedTrackID is None:
-                    loadedTrackID = newSession.trackID
-                else:
-                    if loadedTrackID != newSession.trackID:
-                        failAlert = QtWidgets.QMessageBox(text="Error: Cannot open data from different tracks. Make sure all telemetry files are from the same track and try again.", parent=self.parent())
-                        failAlert.setWindowTitle("Session Loading Error")
-                        failAlert.exec()
-                        return  # Fail if user is loading data from different tracks
+                self._addSessions(data, fileName)
+    
+    def _isColumnUnique(series: pd.Series):
+        """Checks if each value in a Pandas Series is equal."""
+        n = series.to_numpy()
+        return (n[0] == n).all()
+    
+    def _sortData(data: pd.DataFrame):
+        """Sorts the DataFrame in-place based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
+        by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
+        can overflow after about 50 days. This will detect an overflow and re-sort the fields to restore true chronological order."""
 
-                # Make sure all new sessions are loaded successfully before replacing all currently opened sessions
-                tempSessionsDict[fileName] = newSession
+        threshold = 3600000  # If the gap between adjacent timestamps is larger than this, an overflow has occurred (3600000ms is about an hour)
+        #threshold = 1000  # For testing
+        
+        # Sort based on timestamp
+        data.sort_values(by="timestamp_ms", inplace=True, kind='mergesort')
 
-            self.sessions = tempSessionsDict  # Replace the currently loaded sessions with new ones
-            self.focusedLaps.clear()  # Clear the currently focused laps
-            self.sessionReset.emit()
-            for name, s in self.sessions.items():
-                self.sessionLoaded.emit(s)
-                self.focusedLaps[name] = dict()
-                self.colourPicker.reset()
+        # Iterate through array and try to detect an overflow
+        overflowIndex = -1
+        for i in range(1, len(data["timestamp_ms"])):
+            if data["timestamp_ms"].loc(i) - data["timestamp_ms"].loc(i - 1) > threshold:
+                overflowIndex = i
+                break
+        
+        # If the overflow index has changed, meaning an overflow has been detected at this index:
+        if overflowIndex != -1:
 
+            # Find the max value for timestamp_ms (Should be at the end)
+            maxTimestamp = data["timestamp_ms"].max()
 
-class MultiPlotWidget(QtWidgets.QWidget):
-    """Displays multiple telemetry plots generated from the session telemetry data. Each plot will correspond with either
-    a parameter from the Forza data packet, or a calculated parameter such as delta. The parameter will be the Y axis, and
-    the X axis will always be lap distance. A 'player head' will be visible in each plot, indicating which part of the plot
-    the lap video viewer is looking at."""
-
-
-    class PlotController(QtWidgets.QWidget):
-        """A widget to control which plots are displayed"""
-
-
-        class PlotCheckBox(QtWidgets.QCheckBox):
+            # Add the max value + 1 to each of the timestamps after the overflow
+            for i in range(0, overflowIndex):
+                data["timestamp_ms"].loc(i) += maxTimestamp + 1
             
-            # Emitted when the checkbox is clicked. Contains the plot type as a str, and the checkstate
-            toggleFocus = pyqtSignal(str, Qt.CheckState)
-
-            def __init__(self, plotType: str, parent = None):
-                super().__init__(parent = parent)
-                self.plotType = plotType
-                self.stateChanged.connect(self._emitToggleSignal)
-            
-            def _emitToggleSignal(self):
-                self.toggleFocus.emit(self.plotType, self.checkState())
-
-
-        # Emitted when the user select a plot to add or remove
-        togglePlot = pyqtSignal(str, Qt.CheckState)
-
-        def __init__(self, customPlotList, parent = None):
-            super().__init__(parent)
-            self.displayedPlots = OrderedDict()  # Just using the keys to act like an ordered set. Each key is a plot type
-            self.l = QtWidgets.QFormLayout()
-            self.setLayout(self.l)
-
-            # All the possible plot types formed of custom calculated plots, and the Forza parameters
-            self.plotTypes = customPlotList
-            self.plotTypes += Utility.ForzaSettings.params
-
-            # Dictionary of all plot types to checkboxes so user can choose to add plots
-            self.plotDict = dict()
-            for plotType in self.plotTypes:
-                checkBox = MultiPlotWidget.PlotController.PlotCheckBox(plotType=plotType)
-                checkBox.toggleFocus.connect(self.togglePlot)
-                self.plotDict[plotType] = checkBox
-
-            # Add a checkbox for each plot type
-            for plotType, checkBox in self.plotDict.items():
-                self.l.addRow(plotType, checkBox)
-        
-        def reset(self):
-            """Resets all the checkboxes and clears dictionaries"""
-            self.displayedPlots.clear()
-            for checkBox in self.plotDict.values():
-                checkBox.setCheckState(Qt.CheckState.Unchecked)
+            # Re-sort the array in-place to put those rows after the overflow at the back again
+            data.sort_values(by="timestamp_ms", inplace=True, kind='mergesort')
     
+    def _flip(restartNumber: int, restartFlag: bool) -> int:
+        """Special function used to help assign restart numbers to session telemetry data"""
+        restartFlag = not restartFlag
+        restartNumber += 1
+        return restartNumber
 
-    class PlotDisplay(QtWidgets.QWidget):
-        """A widget that displays all the plots"""
+    def _addSessions(self, data: pd.DataFrame, sessionName: str):
+        """Adds the sessions containined within the data frame to the Session Manager. A single session will be determined by when the user
+        restarts a race or skips a lap."""
 
-        def __init__(self, parent = None):
-            super().__init__(parent)
+        # A single CSV telemetry file could span multiple restarts. As long as it contains data from only one track, this will split the
+        # data into multiple usable sessions. Each session will contain at least one whole lap of the circuit, regardless of car used.
 
-            self.lt = QtWidgets.QVBoxLayout()
-            self.setLayout(self.lt)
+        # Data needs to be verified first to check that it's all within a single track (All packet track_ordinal values need to be equal)
+        if not self._isColumnUnique(data["track_ordinal"]):
+            raise ValueError('Cannot load session: contains telemetry data from more than one track. Split the data into separate files and try again.')
 
+        # Data needs to be sorted based on Forza's internal timestamp (timestamp_ms), as the order it currently is in may not be reliable
+        # (Eg. ordered based on time of collection when UDP is not reliable). As the timestamp may overflow back to 0, this also needs to
+        # be accounted for
+        SessionManager._sortData(data)
 
-    class MultiLapPlot(pg.PlotWidget):
-        
-        def __init__(self, title: str, parent=None, background='default', plotItem=None, **kargs):
-            super().__init__(parent, background, plotItem, title=title, **kargs)
-            self.lines = dict()  # (sessionName, Lap Number) : Line
-        
-        def addLap(self, sessionName: str, lapNumber: int, xValues: np.ndarray, yValues: np.ndarray, hue: int = 0):
-            """Adds a new line onto the plot displaying values from a single lap"""
+        # Data needs to be split into restarts
+        # Each restart will ALWAYS start with a negative dist_traveled packet as forza always starts a car behind the start-finish line,
+        # UNLESS the player stared recording telemetry in the middle of a lap.
+        # Splitting the data into sections, with each section beginning at the FIRST packet with a negative dist_traveled and ending with
+        # the packet just before a negative packet will correctly split the data. Lap number CANNOT be used here, as it is not reset after
+        # a 'skip lap' is triggered, therefore becoming invalid as the game displays a different lap number to data out.
+        restartNumber = 0
+        restartFlag = True if data["dist_traveled"][0] > 0 else False  # Set to true if the player started recording mid lap
 
-            if self.lines.get((sessionName, lapNumber)) == None:  # Don't add if it's already in the plot
-                colour = QColor()
-                colour.setHsv(hue, 255, 255)
-                pen = pg.mkPen(colour)
-                line = self.plot(xValues, yValues, pen=pen)
-                self.lines[(sessionName, lapNumber)] = line
+        # Create a new column 'restart' that groups each row into a restart
+        data["restart"] = [restartNumber if (restartFlag and dist >= 0 or not restartFlag and dist < 0) else SessionManager._flip(restartNumber, restartFlag) for dist in data["dist_traveled"]]
 
-        def removeLap(self, sessionName: str, lapNumber: int):
-            """Removes a single line from the plot associated with a single lap"""
+        # Restarts can be discarded if they have less than one complete lap
+        # ie. if the only unique lap in that restart is 0, and the last row's dist_traveled value is much less than the track's distance
 
-            line = self.lines.get((sessionName, lapNumber))
-            if line is not None:
-                self.removeItem(line)
-                self.lines.pop((sessionName, lapNumber))
+        # Create a new session for each valid restart, leaving any incomplete laps in as they can still be used to get an accurate lap time for the previous lap
+        tempSessions = dict()
+        for r in range(0, restartNumber + 1):
+            restartData = data[data["restart"] == r]
+            newSession = Session(restartData)
 
-
-    def __init__(self, sessionManager: SessionManager):
-        super().__init__()
-
-        self.customPlotTypes = ["delta"]
-        self.currentPlots = OrderedDict()  # Dictionary of plotType: str to PlotWidget objects
-
-        self.controller = MultiPlotWidget.PlotController(self.customPlotTypes)
-        self.controller.togglePlot.connect(self.togglePlot)
-        self.plotDisplay = MultiPlotWidget.PlotDisplay()
-        self.sessionManager = sessionManager  # So the plots can access the session data
-
-        controllerScrollArea = QtWidgets.QScrollArea()
-        controllerScrollArea.setWidget(self.controller)
-        controllerScrollArea.setWidgetResizable(True)
-        controllerScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-
-        plotScrollArea = QtWidgets.QScrollArea()
-        plotScrollArea.setWidget(self.plotDisplay)
-        plotScrollArea.setWidgetResizable(True)
-        plotScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-
-        layout = QtWidgets.QHBoxLayout()
-        layout.addWidget(controllerScrollArea, 0)
-        layout.addWidget(plotScrollArea, 1)
-        self.setLayout(layout)
-    
-    def togglePlot(self, plotType: str, checkState: Qt.CheckState):
-        """Displays or removes a plot from the display widget. All currently focused laps will appear as lines in the plot."""
-        
-        if checkState == Qt.CheckState.Checked:
-            # Add the plot to the end of the display widget and the dictionary
-            plot = MultiPlotWidget.MultiLapPlot(plotType)
-
-            # Link the X-axis to the first plot in the dict (Can only link to one plot at a time, but a plot can provide many links)
-            if len(self.currentPlots):
-                plot.setXLink(list(self.currentPlots.values())[0])
-
-            # Add all the currently focused laps to the plot
-            for sessionName, focusedLapsDict in self.sessionManager.focusedLaps.items():
-                for lapNumber, hue in focusedLapsDict.items():
-                    xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
-                    logging.info("Adding lap {} with hue {}".format(lapNumber, hue))
-                    plot.addLap(sessionName, lapNumber, xValues, yValues, hue)
-                
-            plot.setMinimumHeight(300)
-            self.currentPlots[plotType] = plot
-            self.plotDisplay.layout().addWidget(plot)
-        else:
-            # Remove the plot
-            plot = self.currentPlots.get(plotType)
-            if plot is not None:
-                # Remove the widget from the layout, and delete it from the plot dictionary
-                self.plotDisplay.layout().removeWidget(plot)
-                self.currentPlots.pop(plotType)
-
-                # Re-link the X-axis of all the plots
-                if len(self.currentPlots):
-                    for plotWidget in self.currentPlots.values():
-                        plotWidget.setXLink(list(self.currentPlots.values())[0]) 
-    
-    def toggleLap(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
-        """Adds or removes a lap from all the plots"""
-        
-        if checkState == Qt.CheckState.Checked:
-            # Add the lap to all the currently displayed plots
-            lapHue = self.sessionManager.focusedLaps[sessionName][lapNumber]
-            for plotType, plotWidget in self.currentPlots.items():
-                xValues, yValues = self._getLapData(plotType, sessionName, lapNumber)
-                plotWidget.addLap(sessionName, lapNumber, xValues, yValues, lapHue)
-        else:
-            # Remove the lap from all the currently displayed plots
-            for plot in self.currentPlots.values():
-                plot.removeLap(sessionName, lapNumber)
-    
-    def _getLapData(self, plotType: str, sessionName: str, lapNumber: int):
-        """Returns a tuple of the x and y values as numpy arrays of the lap data for a specified plot type. Eg. if the plot type was 'speed',
-        this will return (x-values, y-values) where x-values is a numpy array containing the distance traveled that lap, and y-values is
-        a numpy array containing the speed values."""
-
-        # Get the lap data from the correct session
-        lapView = self.sessionManager.sessions[sessionName].lapViews[lapNumber]
-        distanceCopy = lapView["dist_traveled"].copy()  # Copied so the values can be normalise without affecting the original data
-        yValues = None
-
-        # Normalise the dist_traveled for each entry so that it always starts at 0, allowing the
-        # laps to sit on top of each other in the plot
-        if lapNumber > 0:  # Lap 0 does not need to be normalised
-            startDistance = distanceCopy[0]
-            for i in range(0, len(distanceCopy)):
-                distanceCopy[i] -= startDistance
-        
-        if plotType in Utility.ForzaSettings.params:
-            yValues = lapView[plotType]
-        else:
-            # Fill yValues with the calculate values
-            yValues = []
-        
-        return (distanceCopy, yValues)
-    
-    def reset(self):
-        """Resets the plot widget - removes any displayed plots and unchecks the plot controller checkboxes"""
-        
-        # Remove the plot widgets from the layout and from the dictionary
-        for plot in self.currentPlots.values():
-            self.plotDisplay.layout().removeWidget(plot)
-        self.currentPlots.clear()
-
-        # Reset the checkboxes
-        self.controller.reset()
-
-
-    def _update(self, data: np.ndarray):
-        """Creates new plots from the new session telemetry data, but doesn't display them right away"""
-        self.data = data
-
-        self.addNewPlot("time", "cur_lap_time")
-        self.addNewPlot("dist_traveled", "speed")
-        self.addNewPlot("dist_traveled", "steer")
-
-        t = self.plots["cur_lap_time"].getPlotItem().getViewBox()
-        u = self.plots["speed"].getPlotItem().getViewBox()
-        v = self.plots["steer"].getPlotItem().getViewBox()
-
-        v.setXLink(t)
-
-    def _addNewPlot(self, x: str, y: str):
-        """
-        Adds a new plot to the layout
-        
-        Parameters
-        ----------
-        x : The parameter to assign to the x axis, eg. dist_traveled
-        y : The parameter to assign to the y axis, eg. speed
-        """
-        
-        xAxis = self.data[x]
-        newPlot = pg.plot(title = y)
-        newPlot.setMinimumHeight(300)
-        logging.info("Min size hint of newPlot: {} by {}".format(newPlot.minimumSize().width(), newPlot.minimumSize().height()))
-        yAxis = self.data[y]
-        newPlot.plot(xAxis, yAxis)
-
-        vLine = pg.InfiniteLine(angle=90, movable=False)  # Player head
-        newPlot.addItem(vLine, ignoreBounds = True)
-
-        self.plots[y] = newPlot
-        self.lt.addWidget(newPlot)
+        # The last lap in each restart can be discarded if it is incomplete, but not before the last_lap_time value has been recorded.
+        # This is needed to set an accurate lap time for the previous lap
 
 
 class SessionOverviewWidget(QtWidgets.QWidget):
@@ -584,172 +262,24 @@ class SessionOverviewWidget(QtWidgets.QWidget):
 
             self.focusedLapsNumber -= 1
 
+    def updateColour(self, focusedLapsDict):
+        """Updates the colour of the checkboxes of the focused laps"""
+        pass
 
-class LapViewer(QtWidgets.QWidget):
-    """Displays a single video widget to the user starting at a specified point in the video, eg. the start of a lap."""
 
-    class State(Enum):
-        UNINITIALISED = 0
-        INITIALISED = 1
+class MultiPlotWidget(QtWidgets.QFrame):
+    """Displays multiple plots generated from the session data."""
 
-    def __init__(self, source: str = None, position: int = 0):
-        super().__init__()
-        self.mediaPlayer = QtMultimedia.QMediaPlayer()
-        self.videoWidget = QVideoWidget()
-        self.mediaPlayer.setVideoOutput(self.videoWidget)
-        self.state = self.State.UNINITIALISED
+    def __init__(self, parent = ..., flags = ...):
+        super().__init__(parent, flags)
 
-        # The position the playback should start at, given as milliseconds since the beginning of the video.
-        # Eg. if position = 0, the playback starts from the very beginning of the video.
-        self.startingPosition = position
 
-        self.mediaPlayer.setSource(QUrl(source))
+class AbstractPlot(pg.PlotWidget, ABC):
+    """An abstract plot base class that can be used with the MultiPlotWidget"""
 
-        # Set the position only when the video has buffered, otherwise it won't set position
-        self.mediaPlayer.mediaStatusChanged.connect(self._positionSettable)
-        
-        lt = QtWidgets.QVBoxLayout()
-        self.setLayout(lt)
-        lt.addWidget(self.videoWidget)
+    def __init__(self, parent=None, background='default', plotItem=None, **kargs):
+        super().__init__(parent, background, plotItem, **kargs)
     
-    def _positionSettable(self, mediaStatus: QtMultimedia.QMediaPlayer.MediaStatus):
-        """Sets the position when the player has buffered media"""
-        if mediaStatus is QtMultimedia.QMediaPlayer.MediaStatus.BufferedMedia and self.state is self.State.UNINITIALISED:
-            self.mediaPlayer.setPosition(self.startingPosition)
-            self.state = self.State.INITIALISED
-            logging.info("Set position to {}".format(self.mediaPlayer.position()))
-    
-    def stop(self):
-        """Stops the playback and resets the position to the given starting position"""
-        self.mediaPlayer.stop()
-        self.mediaPlayer.setPosition(self.startingPosition)
-    
-    def pause(self):
-        """Pauses the playback at the current position"""
-
-        # If the video has reached the end, pausing it will reset to the beginning. This disables that, so the user can
-        # watch the rest of the other laps uninterrupted.
-        if self.mediaPlayer.mediaStatus() is not QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
-            self.mediaPlayer.pause()
-    
-    def play(self):
-        """Starts playing the video at its current position"""
-
-        if self.mediaPlayer.mediaStatus() is not QtMultimedia.QMediaPlayer.MediaStatus.EndOfMedia:
-            logging.info("Playing...")
-            self.mediaPlayer.play()
-
-
-class VideoPlayer(QtWidgets.QWidget):
-    """
-    Displays the videos of the session to the user. Can display multiple different laps side by side.
-    """
-
-    # Emitted when the primary video is playing, and the position is updated. Emitted with position as an int, as
-    # milliseconds since the beginning of the video
-    positionChanged = pyqtSignal(int)
-
-    def __init__(self, parent = None):
-        super().__init__(parent = parent)
-        
-        # A list of the different laps displayed as LapViewer widgets
-        self.lapViewers = list()
-
-        # The file path to the session's video
-        self.source: QUrl = None
-        
-        self.lt = QtWidgets.QHBoxLayout()
-        self.setLayout(self.lt)
-
-        self.setStatusTip("Video player: Plays footage from your session.")
-    
-    def addViewer(self, position: int = 0):
-        """
-        Adds a new viewer into the widget, starting at the given point in the video.
-
-        Parameters
-        ----------
-        position : The position that the video should start at, given as milliseconds since the beginning of the video.
-        """
-
-        if self.source is None:
-            return
-        
-        newLap = LapViewer(self.source, position)
-        self.lapViewers.append(newLap)
-        self.lt.addWidget(newLap)
-    
-    def setSource(self, filePath: str):
-        """
-        Sets a new video source for the player.
-
-        Parameters
-        ----------
-
-        filePath : The path to the new video source. If the suffix is not a supported
-        type (eg. mp4), it will be converted to one.
-        """
-
-        path = pathlib.Path(filePath).resolve()
-
-        # Find an mp4 video file with the same name
-        if path.suffix != ".mp4":
-            path = path.with_suffix(".mp4")
-
-        if not path.exists():
-            dlg = QtWidgets.QMessageBox(self)
-            dlg.setWindowTitle("Video file not loaded.")
-            dlg.setText('The video file "{}" could not be loaded.'.format(str(path)))
-            dlg.exec()
-            return
-        
-        self.source = QUrl.fromLocalFile(str(path))
-        logging.info("Loaded video file")
-
-        # Testing the video player displaying multiple viewpoints
-        logging.info("Testing the video player...")
-        self.addViewer(20000)
-        self.addViewer(3000)  # 3 Seconds into the video
-    
-    def stop(self):
-        """Stops the lap viewers and resets them to their given start positions"""
-        for viewer in self.lapViewers:
-            viewer.stop()
-    
-    def playPause(self, play: bool):
-        """Toggles the video playback"""
-        if play:
-            for viewer in self.lapViewers:
-                viewer.play()
-        else:
-            for viewer in self.lapViewers:
-                viewer.pause()
-
-
-class RecordStatusWidget(QtWidgets.QFrame):
-    """Displays the current record config settings and status of the recording"""
-
-    def __init__(self, port: str, ip: str, camera: str = None):
-        super().__init__()
-
-        layout = QtWidgets.QHBoxLayout()
-        self.currentPortLabel = QtWidgets.QLabel("Port: {}".format(port))
-        layout.addWidget(self.currentPortLabel)
-
-        self.ipLabel = QtWidgets.QLabel("IP: {}".format(ip))
-        layout.addWidget(self.ipLabel)
-
-        self.cameraLabel = QtWidgets.QLabel("Camera: {}".format(camera))
-        layout.addWidget(self.cameraLabel)
-
-        self.setLayout(layout)
-    
-    #@pyqtSlot(str)
-    def update(self, port: str, camera: str):
-        """Updates the widget with new record settings"""
-        self.currentPortLabel.setText("Port: {}".format(port))
-        self.cameraLabel.setText("Camera: {}".format(camera))
-
 
 class MainWindow(QtWidgets.QMainWindow):
 
@@ -758,12 +288,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
-        self.sessionManager = SessionManager(self)
+        # A DataFrame containing all the track details
+        self.forzaTrackDetails = pd.read_csv(parentDir / pathlib.Path("track-details.csv"))
+        self.sessionManager = SessionManager(self.forzaTrackDetails, self)
 
         # Central widget ----------------------
-
-        self.videoPlayer = VideoPlayer(self)
-        self.setCentralWidget(self.videoPlayer)
 
         # Add the Toolbar and Actions --------------------------
 
@@ -774,20 +303,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Status bar at the bottom of the application
         self.setStatusBar(QtWidgets.QStatusBar(self))
 
-        # Action to play the videos and animate the graphs
-        playPauseAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-play-pause.png"))), "Play/Pause", self)
-        playPauseAction.setCheckable(True)
-        playPauseAction.setShortcut(QKeySequence("Space"))
-        playPauseAction.setStatusTip("Play/Pause Button: Plays or pauses the footage and the telemetry graphs.")
-        playPauseAction.triggered.connect(self.videoPlayer.playPause)
-        toolbar.addAction(playPauseAction)
-
-        # Action to stop and skip to the beginning of the footage
-        stopAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-stop.png"))), "Stop", self)
-        stopAction.setStatusTip("Stop Button: Stops the footage and skips to the beginning.")
-        stopAction.triggered.connect(self.videoPlayer.stop)
-        toolbar.addAction(stopAction)
-
         # Action to open a new session, to load the telemetry csv files and the associated mp4 video with the same name
         openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
         openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
@@ -795,49 +310,16 @@ class MainWindow(QtWidgets.QMainWindow):
         openSessionAction.triggered.connect(self.sessionManager.openSessions)
         toolbar.addAction(openSessionAction)
 
-        # Action to start/stop recording a session (Record UDP data and a video input source)
-        recordSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Record Session", self)
-        recordSessionAction.setShortcut(QKeySequence("Ctrl+R"))
-        recordSessionAction.setCheckable(True)
-        recordSessionAction.setStatusTip("Record Session: Starts recording Forza data and an accompanying video source.")
-        #recordSessionAction.triggered.connect()
-        toolbar.addAction(recordSessionAction)
-
-        # Action to change the record config settings
-        recordConfigAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Record Config", self)
-        recordConfigAction.setShortcut(QKeySequence("Ctrl+S"))
-        recordConfigAction.setStatusTip("Record Config: Change the telemetry and video recording settings.")
-        #recordConfigAction.triggered.connect(self.configureRecord)
-        toolbar.addAction(recordConfigAction)
-
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
         fileMenu = menu.addMenu("&File")
         fileMenu.addAction(openSessionAction)
 
-        actionsMenu = menu.addMenu("&Actions")
-        actionsMenu.addAction(playPauseAction)
-        actionsMenu.addAction(stopAction)
-
-        recordMenu = menu.addMenu("&Record")
-        recordMenu.addAction(recordSessionAction)
-
         # Contains actions to open/close the dock widgets
         viewMenu = menu.addMenu("&View")
 
         # Add the Dock widgets, eg. graph and data table ---------------------
-
-        # Record status widget
-        """
-        recordStatusWidget = RecordStatusWidget(self.record.port, self.record.ip)
-        recordStatusDockWidget = QtWidgets.QDockWidget("Record Status", self)
-        recordStatusDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
-        recordStatusDockWidget.setWidget(recordStatusWidget)
-        recordStatusDockWidget.setStatusTip("Record Status: Displays the main settings and status of the recording.")
-        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, recordStatusDockWidget)
-        self.record.statusUpdate.connect(recordStatusWidget.update)
-        """
 
         # Session Data Viewer widget
         sessionOverviewWidget = SessionOverviewWidget(self)
@@ -855,18 +337,4 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
         sessionOverviewWidget.toggleLapFocus.connect(self.sessionManager.lapFocusToggle)
         self.sessionManager.sessionReset.connect(sessionOverviewWidget.reset)
-
-        # plot widget
-        self.plotWidget = MultiPlotWidget(self.sessionManager)
-        sessionOverviewWidget.toggleLapFocus.connect(self.plotWidget.toggleLap)
-        self.sessionManager.sessionReset.connect(self.plotWidget.reset)
-
-        plotDockWidget = QtWidgets.QDockWidget("Telemetry plots", self)
-        plotDockWidget.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
-        plotDockWidget.setWidget(self.plotWidget)
-        plotDockWidget.setStatusTip("Telemetry plot: Displays the telemetry data from the session.")
-        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, plotDockWidget)
-
-        # Add an action to the menu bar to open/close the dock widgets
-        viewMenu.addAction(plotDockWidget.toggleViewAction())
-        #viewMenu.addAction(recordStatusDockWidget.toggleViewAction())
+        self.sessionManager.focusedLapsChanged.connect(sessionOverviewWidget.updateColour)

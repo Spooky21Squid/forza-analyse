@@ -108,7 +108,7 @@ class SessionManager(QAbstractTableModel):
 
                     # For now, just drop any row that contains an empty value in any field. In future, this could be sophisticated by only
                     # dropping rows that have NA values in required columns, or even replacing NA values with guesses/zeros or something useful.
-                    data.dropna()
+                    #data.dropna(inplace=True)
 
                     fileName = pathlib.Path(filePath).resolve().stem
                     self._processFile(data, fileName, tempNumberOfSessions)

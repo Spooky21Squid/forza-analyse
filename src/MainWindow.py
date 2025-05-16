@@ -44,16 +44,18 @@ class Session(QObject):
 class SessionManager(QObject):
     """Stores and manages all the currently opened Sessions"""
 
+    updated = pyqtSignal()  # Emitted when the data is updated with new sessions
+
     def __init__(self, trackDetails: pd.DataFrame, parent = None):
         super().__init__(parent)
 
-        self.trackDetails = trackDetails
-
-        # A dictionary of currently opened Sessions. Each key is a session name as a string, and each value is a Session object
-        self.sessions = dict()
+        self.trackDetails: pd.DataFrame = trackDetails  # A DataFrame containing details about each track in the game (eg. track ordinal, length etc)
+        self.data: pd.DataFrame | None = None  # The data containing all the currently loaded sessions, restarts and laps
+        self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
+        self.trackOrdinal: int | None = None
 
     def openSessions(self):
-        """Opens and loads the telemetry csv files into the sessions dict"""
+        """Opens and loads the telemetry csv files"""
 
         # Dialog to get the csv files
         dlg = QtWidgets.QFileDialog(self.parent())
@@ -70,13 +72,29 @@ class SessionManager(QObject):
                 # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
                 data = pd.read_csv(filePath)
                 fileName = pathlib.Path(filePath).resolve().stem
-                self._addSessions(data, fileName)
-    
+                self._processFile(data, fileName)
+
+                # If this is the first file to be loaded into the Session Manager, use it to initialise useful values such as
+                # the number of sessions, details about the track etc.
+                # If there are any existing sessions, check that the new sessions are compatible, eg. track ordinal is the same etc
+                if self.numberOfSessions == 0:
+                    self.numberOfSessions = data["session_no"].max() + 1
+                    self.trackOrdinal = data["track_ordinal"][0]
+                    self.data = data
+                else:
+                    if self.trackOrdinal != data["track_ordinal"][0]:
+                        raise ValueError('Cannot load sessions from {}: contains telemetry data from a different track.'.format(filePath))
+                    pd.concat(self.data, data, axis=0, ignore_index=True)
+            
+            self.updated.emit()  # Emit the updated signal after all the files have been uploaded
+                    
+    @staticmethod
     def _isColumnUnique(series: pd.Series):
         """Checks if each value in a Pandas Series is equal."""
         n = series.to_numpy()
         return (n[0] == n).all()
     
+    @staticmethod
     def _sortData(data: pd.DataFrame):
         """Sorts the DataFrame in-place based on the timestamp_ms field. This is Forza's internal timestamp and will ensure rows will be sorted
         by the order they were produced, instead of the order they were received as UDP may be unreliable. This is an unsigned 32 bit int, so
@@ -91,7 +109,7 @@ class SessionManager(QObject):
         # Iterate through array and try to detect an overflow
         overflowIndex = -1
         for i in range(1, len(data["timestamp_ms"])):
-            if data["timestamp_ms"].loc(i) - data["timestamp_ms"].loc(i - 1) > threshold:
+            if data["timestamp_ms"][i] - data["timestamp_ms"][i - 1] > threshold:
                 overflowIndex = i
                 break
         
@@ -103,25 +121,29 @@ class SessionManager(QObject):
 
             # Add the max value + 1 to each of the timestamps after the overflow
             for i in range(0, overflowIndex):
-                data["timestamp_ms"].loc(i) += maxTimestamp + 1
+                #data["timestamp_ms"].loc(i) += maxTimestamp + 1
+                data["timestamp_ms"] = [x + maxTimestamp + 1 for x in data["timestamp_ms"]]
             
             # Re-sort the array in-place to put those rows after the overflow at the back again
             data.sort_values(by="timestamp_ms", inplace=True, kind='mergesort')
-    
-    def _flip(restartNumber: int, restartFlag: bool) -> int:
-        """Special function used to help assign restart numbers to session telemetry data"""
-        restartFlag = not restartFlag
-        restartNumber += 1
-        return restartNumber
 
-    def _addSessions(self, data: pd.DataFrame, sessionName: str):
-        """Adds the sessions containined within the data frame to the Session Manager. A single session will be determined by when the user
-        restarts a race or skips a lap."""
+    def _processFile(self, data: pd.DataFrame, fileName: str):
+        """Sorts, cleans, formats and groups the telemetry data within the 'data' DataFrame so it can be added to the Session Manager"""
 
-        # A single CSV telemetry file could span multiple restarts. As long as it contains data from only one track, this will split the
-        # data into multiple usable sessions. Each session will contain at least one whole lap of the circuit, regardless of car used.
+        logging.info("Unsorted Data:\n{}\n{}\n".format(data.head(), data.tail()))
 
-        # Data needs to be verified first to check that it's all within a single track (All packet track_ordinal values need to be equal)
+        # A Session is defined as a continuous period of practice at a single track with a single car. Sessions organise telemetry data into
+        # a sequence of restarts.
+        # A Restart is defined as a continuous AND uninterrupted sequence of complete laps, increasing in lap number. To trigger a restart, a player
+        # may restart a race, or skip a lap. Both options will reset the player's vehicle behind the start-finish line to begin a new lap.
+        # A Lap is complete if the player began recording telemetry at or before the start line, and finished recording telemetry data at or
+        # after the finish line. If telemetry begins or ends in the middle of a lap, it is not complete.
+
+        # A single CSV telemetry file could contain multiple Sessions. As long as it contains data from only one track, this will split the
+        # data into multiple sessions, with each session containing at least one restart. Each restart will contain at least one whole lap
+        # of the circuit.
+
+        # Data needs to be verified first to check that it's all within a single track (All track_ordinal values need to be equal)
         if not self._isColumnUnique(data["track_ordinal"]):
             raise ValueError('Cannot load session: contains telemetry data from more than one track. Split the data into separate files and try again.')
 
@@ -129,27 +151,51 @@ class SessionManager(QObject):
         # (Eg. ordered based on time of collection when UDP is not reliable). As the timestamp may overflow back to 0, this also needs to
         # be accounted for
         SessionManager._sortData(data)
+        #logging.info("Sorted Data:\n{}\n{}\n".format(data.head(), data.tail()))
 
-        # Data needs to be split into restarts
-        # Each restart will ALWAYS start with a negative dist_traveled packet as forza always starts a car behind the start-finish line,
-        # UNLESS the player stared recording telemetry in the middle of a lap.
+        # Data needs to be split into Sessions. A new session begins when the car is changed.
+        # Create a new field called 'session_no', starting at 0
+        # Everytime the player changes car, increment the session_no
+        currentSessionNumber = self.numberOfSessions - 1  # If there are sessions already loaded in Session Manager, start the session count at the next available session number
+        prevCarOrdinal = -1
+        sessionNumberList = []
+        for val in data["car_ordinal"]:
+            if val != prevCarOrdinal:
+                currentSessionNumber += 1
+                prevCarOrdinal = val
+            sessionNumberList.append(currentSessionNumber)
+        data["session_no"] = sessionNumberList
+
+        # Data needs to be split into restarts. Each restart will always begin with a negative dist_traveled value, unless the player began
+        # recording telemetry in the middle of a lap.
         # Splitting the data into sections, with each section beginning at the FIRST packet with a negative dist_traveled and ending with
-        # the packet just before a negative packet will correctly split the data. Lap number CANNOT be used here, as it is not reset after
+        # the last positive packet will correctly split the data. Lap number CANNOT be used here, as it is not reset after
         # a 'skip lap' is triggered, therefore becoming invalid as the game displays a different lap number to data out.
-        restartNumber = 0
-        restartFlag = True if data["dist_traveled"][0] > 0 else False  # Set to true if the player started recording mid lap
+        prevDistanceWasPositive = True
+        currentSessionNumber = -1
+        currentRestartNo = -1
+        restartNumberList = []
+        for sessionNo, distTraveled in zip(data["session_no"], data["dist_traveled"]):
+            if sessionNo != currentSessionNumber:  # If we're looking at a new session, reset the restart number
+                currentSessionNumber = sessionNo
+                currentRestartNo = -1
 
-        # Create a new column 'restart' that groups each row into a restart
-        data["restart"] = [restartNumber if (restartFlag and dist >= 0 or not restartFlag and dist < 0) else SessionManager._flip(restartNumber, restartFlag) for dist in data["dist_traveled"]]
+            if prevDistanceWasPositive and distTraveled < 0:  # Distance has gone from positive to negative indicating a restart
+                prevDistanceWasPositive = False
+                currentRestartNo += 1
+            
+            prevDistanceWasPositive = True if distTraveled >= 0 else False
+            restartNumberList.append(currentRestartNo)
+        
+        data["restart_no"] = restartNumberList
+
+        # At this point, session_no and restart_no columns have been added to group each data packet into a session, restart, and lap within that restart
+
+        # Add a filename column to identify which file the sessions came from
+        data["filename"] = [fileName for i in range(0, data.shape[0])]
 
         # Restarts can be discarded if they have less than one complete lap
         # ie. if the only unique lap in that restart is 0, and the last row's dist_traveled value is much less than the track's distance
-
-        # Create a new session for each valid restart, leaving any incomplete laps in as they can still be used to get an accurate lap time for the previous lap
-        tempSessions = dict()
-        for r in range(0, restartNumber + 1):
-            restartData = data[data["restart"] == r]
-            newSession = Session(restartData)
 
         # The last lap in each restart can be discarded if it is incomplete, but not before the last_lap_time value has been recorded.
         # This is needed to set an accurate lap time for the previous lap
@@ -272,14 +318,12 @@ class MultiPlotWidget(QtWidgets.QFrame):
 
     def __init__(self, parent = ..., flags = ...):
         super().__init__(parent, flags)
-
-
-class AbstractPlot(pg.PlotWidget, ABC):
-    """An abstract plot base class that can be used with the MultiPlotWidget"""
-
-    def __init__(self, parent=None, background='default', plotItem=None, **kargs):
-        super().__init__(parent, background, plotItem, **kargs)
     
+
+class StatusLabel(QtWidgets.QLabel):
+    def __init__(self, parent = None):
+        super().__init__(parent=parent, text="No status yet")
+
 
 class MainWindow(QtWidgets.QMainWindow):
 
@@ -289,10 +333,17 @@ class MainWindow(QtWidgets.QMainWindow):
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
         # A DataFrame containing all the track details
-        self.forzaTrackDetails = pd.read_csv(parentDir / pathlib.Path("track-details.csv"))
+        trackDetailsPath = parentDir / pathlib.Path("track-details.csv")
+        self.forzaTrackDetails = pd.read_csv(str(trackDetailsPath), index_col="ordinal")
+
+        # Stores the data for all currently loaded sessions in a DataFrame
         self.sessionManager = SessionManager(self.forzaTrackDetails, self)
+        self.sessionManager.updated.connect(self.update)
 
         # Central widget ----------------------
+        self.centreLabel = StatusLabel(self)
+        #self.centreLabel.setText(str(self.forzaTrackDetails.loc[873]))
+        self.setCentralWidget(self.centreLabel)
 
         # Add the Toolbar and Actions --------------------------
 
@@ -334,7 +385,16 @@ class MainWindow(QtWidgets.QMainWindow):
         sessionOverviewDockWidget.setWidget(sessionScrollArea)
         sessionOverviewWidget.setStatusTip("Session Overview: View the select which laps to focus on from each session.")
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
-        self.sessionManager.sessionLoaded.connect(sessionOverviewWidget.addSession)
-        sessionOverviewWidget.toggleLapFocus.connect(self.sessionManager.lapFocusToggle)
-        self.sessionManager.sessionReset.connect(sessionOverviewWidget.reset)
-        self.sessionManager.focusedLapsChanged.connect(sessionOverviewWidget.updateColour)
+    
+    def update(self):
+        """Updates the widgets with new information from SessionManager"""
+        
+        # Get the track details
+        # Get the head and tail
+
+        trackSummary = str(self.sessionManager.trackDetails.loc[int(self.sessionManager.trackOrdinal)])
+        head = str(self.sessionManager.data.head())
+        tail = str(self.sessionManager.data.tail())
+
+        self.centreLabel.setText(trackSummary + "\n" + head + "\n" + tail)
+        self.sessionManager.data.to_csv("test.csv")

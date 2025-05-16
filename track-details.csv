@@ -6,69 +6,29 @@ ordinal,title,layout,length,location,country
 113,Circuit de Barcelona-Catalunya,National Circuit Alt,2997,Barcelona,Spain
 530,Circuit de Spa-Francorchamps,Full Circuit,7004,Spa,Belgium
 840,Daytona Intl Speedway,Sports Car Circuit,5777,Daytona,United States
-841,Daytona Intl Speedway,Tri-Oval Circuit,4.02,Daytona,United States
-1661,Eaglerock Speedway,Club Circuit,1.72,Iowa,United States
-1663,Eaglerock Speedway,Club Circuit Reverse,1.72,Iowa,United States
-1660,Eaglerock Speedway,Oval Circuit,1.64,Iowa,United States
-78,Fujimi Kaido,Fujimi Kaido,16.48,Fujimi,Japan
-83,Fujimi Kaido,Fujimi Kaido Reverse,16.48,Fujimi,Japan
-1630,Grand Oak Raceway,National Circuit,3.73,New Hampshire,United States
-1632,Grand Oak Raceway,National Circuit Reverse,3.73,New Hampshire,United States
-1631,Grand Oak Raceway,Club Circuit,2.62,New Hampshire,United States
-1640,Hakone,Grand Prix Circuit,4.28,Hakone,Japan
-1641,Hakone,Club Circuit,3.32,Hakone,Japan
-1643,Hakone,Club Circuit Reverse,3.32,Hakone,Japan
-250,Hockenheimring,Full Circuit,4.57,Hockenheim,Germany
-251,Hockenheimring,National Circuit,3.69,Hockenheim,Germany
-252,Hockenheimring,Short Circuit,2.64,Hockenheim,Germany
-1111,Homestead-Miami Speedway,Road Circuit,3.56,Florida,United States
-1110,Homestead-Miami Speedway,Speedway Circuit,2.41,Florida,United States
-231,Indianapolis Motor Speedway,The Brickyard Speedway,4.02,Indianapolis,United States
-232,Indianapolis Motor Speedway,Grand Prix Circuit,3.93,Indianapolis,United States
-1590,Kyalami Grand Prix Circuit,Grand Prix Circuit,4.53,Midrand,South Africa
-100,Le Mans - Circuit International de la Sarthe,Full Circuit,13.63,Le Mans,France
-101,Le Mans - Circuit International de la Sarthe,Old Mulsanne Circuit,13.54,Le Mans,France
-880,Lime Rock Park,Full Circuit,2.41,Connecticut,United States
-883,Lime Rock Park,Full Circuit Alt,2.41,Connecticut,United States
-882,Lime Rock Park,South Chicane,2.37,Connecticut,United States
-67,Maple Valley,Full Circuit,4.81,Vermont,United States
-68,Maple Valley,Short Circuit,1.85,Vermont,United States
-70,Maple Valley,Short Circuit Reverse,1.85,Vermont,United States
-16,Michelin Raceway Road Atlanta,Grand Prix Course,4.09,Braselton,United States
-17,Michelin Raceway Road Atlanta,Short Course,2.88,Braselton,United States
-1450,Mid-Ohio Sports Car Course,Full Circuit,3.62,Ohio,United States
-1452,Mid-Ohio Sports Car Course,Short Circuit,2.82,Ohio,United States
-540,Mount Panorama Circuit,Bathurst Circuit,6.21,Bathurst,Australia
-35,Mugello Circuit,Full Circuit,5.25,Tuscany,Italy
-36,Mugello Circuit,Club Circuit,2.58,Tuscany,Italy
-31,Nürburgring,Full Circuit,25.38,Nürburg,Germany
-32,Nürburgring,Nordschleife,20.83,Nürburg,Germany
-33,Nürburgring,GP Circuit,5.15,Nürburg,Germany
-34,Nürburgring,Sprint Circuit,3.63,Nürburg,Germany
-3,Road America,Full Circuit,6.52,Wisconsin,United States
-5,Road America,East Route,3.52,Wisconsin,United States
-40,Sebring International Raceway,Full Circuit,5.95,Sebring,United States
-42,Sebring International Raceway,Short Circuit,3.22,Sebring,United States
-21,Silverstone Racing Circuit,Grand Prix Circuit,5.89,Silverstone,United Kingdom
-23,Silverstone Racing Circuit,International Circuit,2.98,Silverstone,United Kingdom
-22,Silverstone Racing Circuit,National Circuit,2.64,Silverstone,United Kingdom
-1620,Sunset Peninsula Raceway,Full Circuit,4.47,St. Petersburg,United States
-1622,Sunset Peninsula Raceway,Full Circuit Reverse,4.47,St. Petersburg,United States
-1624,Sunset Peninsula Raceway,Speedway,3.93,St. Petersburg,United States
-1621,Sunset Peninsula Raceway,Club Circuit,3.12,St. Petersburg,United States
-1623,Sunset Peninsula Raceway,Club Circuit Reverse,3.12,St. Petersburg,United States
-37,Suzuka Circuit,Full Circuit,5.81,Suzuka,Japan
-38,Suzuka Circuit,East Circuit,2.25,Suzuka,Japan
-996,Virginia International Raceway,Grand East,6.76,Virginia,United States
-995,Virginia International Raceway,Grand West,6.6,Virginia,United States
-990,Virginia International Raceway,Full,5.26,Virginia,United States
-991,Virginia International Raceway,North,3.62,Virginia,United States
-992,Virginia International Raceway,South,2.66,Virginia,United States
-870,Watkins Glen International Speedway,Full Circuit,5.55,New York,United States
-873,Watkins Glen International Speedway,Short Circuit,3.94,New York,United States
-0,WeatherTech Raceway Laguna Seca,Full Circuit,3.6,California,United States
-1,WeatherTech Raceway Laguna Seca,Short Circuit,2.96,California,United States
-510,Yas Marina Circuit,Full Circuit,5.28,Abu Dhabi,United Arab Emirates
-511,Yas Marina Circuit,North Circuit,3,Abu Dhabi,United Arab Emirates
-513,Yas Marina Circuit,North Corkscrew,2.29,Abu Dhabi,United Arab Emirates
-512,Yas Marina Circuit,South Circuit,2.19,Abu Dhabi,United Arab Emirates
+841,Daytona Intl Speedway,Tri-Oval Circuit,4023,Daytona,United States
+1661,Eaglerock Speedway,Club Circuit,1722,Iowa,United States
+1663,Eaglerock Speedway,Club Circuit Reverse,1722,Iowa,United States
+1660,Eaglerock Speedway,Oval Circuit,1642,Iowa,United States
+78,Fujimi Kaido,Fujimi Kaido,1648,Fujimi,Japan
+83,Fujimi Kaido,Fujimi Kaido Reverse,1648,Fujimi,Japan
+1630,Grand Oak Raceway,National Circuit,3734,New Hampshire,United States
+1632,Grand Oak Raceway,National Circuit Reverse,3734,New Hampshire,United States
+1631,Grand Oak Raceway,Club Circuit,2623,New Hampshire,United States
+1640,Hakone,Grand Prix Circuit,4281,Hakone,Japan
+1641,Hakone,Club Circuit,3315,Hakone,Japan
+1643,Hakone,Club Circuit Reverse,3315,Hakone,Japan
+250,Hockenheimring,Full Circuit,4574,Hockenheim,Germany
+251,Hockenheimring,National Circuit,3692,Hockenheim,Germany
+252,Hockenheimring,Short Circuit,2638,Hockenheim,Germany
+1111,Homestead-Miami Speedway,Road Circuit,3556,Florida,United States
+1110,Homestead-Miami Speedway,Speedway Circuit,2414,Florida,United States
+231,Indianapolis Motor Speedway,The Brickyard Speedway,4023,Indianapolis,United States
+232,Indianapolis Motor Speedway,Grand Prix Circuit,3925,Indianapolis,United States
+1590,Kyalami Grand Prix Circuit,Grand Prix Circuit,4529,Midrand,South Africa
+100,Le Mans - Circuit International de la Sarthe,Full Circuit,13626,Le Mans,France
+101,Le Mans - Circuit International de la Sarthe,Old Mulsanne Circuit,13535,Le Mans,France
+880,Lime Rock Park,Full Circuit,2414,Connecticut,United States
+883,Lime Rock Park,Full Circuit Alt,2414,Connecticut,United States
+882,Lime Rock Park,South Chicane,2366,Connecticut,United States
+873,Watkins Glen International Speedway,Short Circuit,3940,New York,United States

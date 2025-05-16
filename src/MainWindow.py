@@ -50,36 +50,36 @@ class SessionManager(QAbstractTableModel):
         super().__init__(parent)
 
         self.trackDetails: pd.DataFrame = trackDetails  # A DataFrame containing details about each track in the game (eg. track ordinal, length etc)
-        self.data: pd.DataFrame | None = None  # The data containing all the currently loaded sessions, restarts and laps
+        self.telemetry: pd.DataFrame | None = None  # The data containing all the currently loaded sessions, restarts and laps
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
         self.summaryTable: pd.DataFrame | None = None
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
-            if self.data is None:
+            if self.telemetry is None:
                 return None
-            value = self.data.iloc[index.row(), index.column()]
+            value = self.telemetry.iloc[index.row(), index.column()]
             return str(value)
     
     def rowCount(self, index):
-        if self.data is None:
+        if self.telemetry is None:
             return 0
-        return self.data.shape[0]
+        return self.telemetry.shape[0]
 
     def columnCount(self, index):
-        if self.data is None:
+        if self.telemetry is None:
             return 0
-        return self.data.shape[1]
+        return self.telemetry.shape[1]
 
     def headerData(self, section, orientation, role):
         # section is the index of the column/row.
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                return str(self.data.columns[section])
+                return str(self.telemetry.columns[section])
 
             if orientation == Qt.Orientation.Vertical:
-                return str(self.data.index[section])
+                return str(self.telemetry.index[section])
 
     def openNewSessions(self):
         """Opens and loads the telemetry csv files"""
@@ -131,10 +131,10 @@ class SessionManager(QAbstractTableModel):
             
             # All sessions were loaded successfull, now replace the currently loaded sessions with new ones
             self.beginResetModel()
-            self.data = tempSessionData
+            self.telemetry = tempSessionData
             self.trackOrdinal = tempTrackOrdinal
             self.numberOfSessions = tempNumberOfSessions
-            self.summaryTable = SessionManager._generateSummaryTable(self.data)
+            self.summaryTable = SessionManager._generateSummaryTable(self.telemetry)
 
             self.updated.emit()  # Emit the updated signal after all the files have been uploaded
             self.endResetModel()
@@ -405,5 +405,5 @@ class MainWindow(QtWidgets.QMainWindow):
         #summary = self.sessionManager.summaryTable
 
         #self.centreLabel.setText(trackSummary + "\n" + str(summary.head) + "\n" + str(summary.tail))
-        self.sessionManager.data.to_csv("test.csv")
+        self.sessionManager.telemetry.to_csv("test.csv")
         pass

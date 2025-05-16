@@ -54,7 +54,7 @@ class SessionManager(QObject):
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
 
-    def openSessions(self):
+    def openNewSessions(self):
         """Opens and loads the telemetry csv files"""
 
         # Dialog to get the csv files
@@ -68,25 +68,34 @@ class SessionManager(QObject):
             filePathList = dlg.selectedFiles()
             logging.info("Found Files: {}".format(filePathList))
 
+            tempSessionData = None  # Temporarily load sessions into here so the current sessions aren't overwritten before all files have been checked
+            tempNumberOfSessions = 0
+            tempTrackOrdinal = None
+
             for filePath in filePathList:
                 # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
                 data = pd.read_csv(filePath)
                 fileName = pathlib.Path(filePath).resolve().stem
-                self._processFile(data, fileName)
+                self._processFile(data, fileName, tempNumberOfSessions)
 
                 # If this is the first file to be loaded into the Session Manager, use it to initialise useful values such as
                 # the number of sessions, details about the track etc.
                 # If there are any existing sessions, check that the new sessions are compatible, eg. track ordinal is the same etc
-                if self.numberOfSessions == 0:
-                    self.numberOfSessions = data["session_no"].max() + 1
-                    self.trackOrdinal = data["track_ordinal"][0]
-                    self.data = data
+                if tempNumberOfSessions == 0:
+                    tempNumberOfSessions = data["session_no"].max() + 1
+                    tempTrackOrdinal = data["track_ordinal"][0]
+                    tempSessionData = data
                 else:
-                    if self.trackOrdinal != data["track_ordinal"][0]:
+                    if tempTrackOrdinal != data["track_ordinal"][0]:
                         raise ValueError('Cannot load sessions from {}: contains telemetry data from a different track.'.format(filePath))
-                    self.data = pd.concat([self.data, data], axis=0, ignore_index=True)
-                    self.numberOfSessions += data["session_no"].max() + 1
+                    tempSessionData = pd.concat([tempSessionData, data], axis=0, ignore_index=True)
+                    tempNumberOfSessions += data["session_no"].max() + 1
             
+            # All sessions were loaded successfull, now replace the currently loaded sessions with new ones
+            self.data = tempSessionData
+            self.trackOrdinal = tempTrackOrdinal
+            self.numberOfSessions = tempNumberOfSessions
+
             self.updated.emit()  # Emit the updated signal after all the files have been uploaded
                     
     @staticmethod
@@ -128,7 +137,7 @@ class SessionManager(QObject):
             # Re-sort the array in-place to put those rows after the overflow at the back again
             data.sort_values(by="timestamp_ms", inplace=True, kind='mergesort')
 
-    def _processFile(self, data: pd.DataFrame, fileName: str):
+    def _processFile(self, data: pd.DataFrame, fileName: str, numberOfExistingSessions = 0):
         """Sorts, cleans, formats and groups the telemetry data within the 'data' DataFrame so it can be added to the Session Manager"""
 
         logging.info("Unsorted Data:\n{}\n{}\n".format(data.head(), data.tail()))
@@ -157,7 +166,7 @@ class SessionManager(QObject):
         # Data needs to be split into Sessions. A new session begins when the car is changed.
         # Create a new field called 'session_no', starting at 0
         # Everytime the player changes car, increment the session_no
-        currentSessionNumber = self.numberOfSessions - 1  # If there are sessions already loaded in Session Manager, start the session count at the next available session number
+        currentSessionNumber = numberOfExistingSessions - 1  # If there are sessions already loaded in Session Manager, start the session count at the next available session number
         prevCarOrdinal = -1
         sessionNumberList = []
         for val in data["car_ordinal"]:
@@ -356,17 +365,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setStatusBar(QtWidgets.QStatusBar(self))
 
         # Action to open a new session, to load the telemetry csv files and the associated mp4 video with the same name
-        openSessionAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open Session", self)
-        openSessionAction.setShortcut(QKeySequence("Ctrl+O"))
-        openSessionAction.setStatusTip("Open Session: Opens a CSV telemetry file (and video if there is one) to be analysed.")
-        openSessionAction.triggered.connect(self.sessionManager.openSessions)
-        toolbar.addAction(openSessionAction)
+        openNewSessionsAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/folder-open-document.png"))), "Open New Sessions", self)
+        openNewSessionsAction.setShortcut(QKeySequence("Ctrl+O"))
+        openNewSessionsAction.setStatusTip("Open New Sessions: Opens new CSV telemetry files (and video if there is one) to be analysed.")
+        openNewSessionsAction.triggered.connect(self.sessionManager.openNewSessions)
+        toolbar.addAction(openNewSessionsAction)
 
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
         fileMenu = menu.addMenu("&File")
-        fileMenu.addAction(openSessionAction)
+        fileMenu.addAction(openNewSessionsAction)
 
         # Contains actions to open/close the dock widgets
         viewMenu = menu.addMenu("&View")

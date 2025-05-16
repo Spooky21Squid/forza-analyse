@@ -276,116 +276,41 @@ class SessionManager(QAbstractTableModel):
         # This is needed to set an accurate lap time for the previous lap
 
 
-class SessionOverviewWidget(QtWidgets.QWidget):
-    """Displays data about all the currently opened Sessions and all the laps in each Session"""
-
-    # Emitted when the user wants to toggle focus on a lap (add to the graphs and display the video), by checking the
-    # checkbox. Will emit with the session name as a str, lap number as an int, and whether the user is toggling
-    # on or off, as a CheckState class
-    toggleLapFocus = pyqtSignal(str, int, Qt.CheckState)
-
-
-    class SessionViewerWidget(QtWidgets.QGroupBox):
-        """Displays data about a single Session"""
-
-
-        class LapCheckBox(QtWidgets.QCheckBox):
-            
-            # Emitted when the checkbox is clicked. Contains the lap number as an int, and the checkstate
-            toggleLapFocus = pyqtSignal(int, Qt.CheckState)
-
-            def __init__(self, lapNumber: int, parent = None):
-                super().__init__(parent = parent)
-                self.lapNumber = lapNumber
-                self.stateChanged.connect(self._emitToggleSignal)
-            
-            def _emitToggleSignal(self):
-                self.toggleLapFocus.emit(self.lapNumber, self.checkState())
-
-
-        # Emitted when the user wants to toggle focus on a lap (add to the graphs and display the video), by checking the
-        # checkbox. Will emit with the session name as a str, lap number as an int, and whether the user is toggling
-        # on or off, as a CheckState class
-        toggleLapFocus = pyqtSignal(str, int, Qt.CheckState)
-
-        def __init__(self, session: Session, parent = None):
-            super().__init__(title = session.name, parent = parent)
-
-            self.sessionName = session.name
-            self.lapCheckBoxes = []  # A list of all the LapCheckBox widgets
-
-            layout = QtWidgets.QGridLayout()
-            self.setLayout(layout)
-
-            # Add the header
-            layout.addWidget(QtWidgets.QLabel(text="Lap", parent=self), 0, 0)
-            layout.addWidget(QtWidgets.QLabel(text="Show", parent=self), 0, 1)
-            layout.addWidget(QtWidgets.QLabel(text="Lap Time", parent=self), 0, 2)
-
-            self._row = 1  # The next free row to add a lap into
-            for lap in session.laps:
-                self.addLap(lap)
-        
-        def lapToggled(self, lapNumber: int, checkState: Qt.CheckState):
-            self.toggleLapFocus.emit(self.sessionName, lapNumber, checkState)
-            
-        def addLap(self, lap: np.ndarray):
-            """Adds a new lap as a new row into the viewer widget"""
-            self.layout().addWidget(QtWidgets.QLabel(text=str(lap["lap_no"]), parent=self), self._row, 0)
-            lapCheckBox = SessionOverviewWidget.SessionViewerWidget.LapCheckBox(lap["lap_no"], self)
-            self.lapCheckBoxes.append(lapCheckBox)
-            lapCheckBox.toggleLapFocus.connect(self.lapToggled)
-            self.layout().addWidget(lapCheckBox, self._row, 1)
-            self.layout().addWidget(QtWidgets.QLabel(text=Utility.formatLapTime(lap["lap_time"]), parent=self), self._row, 2)
-            self._row += 1
-        
+class DataControllerWidget(QtWidgets.QWidget):
+    """
+    Controls which laps will appear on the plots for the user to analyse. At first all laps will be de-selected. The user can choose at most
+    6 laps to view simultaneously. The first lap to be selected will act as the 'control lap' - the lap which all other laps will be compared
+    to. This lap can be changed and will affect all plots that rely on the control lap. For example, the delta plot compares the difference in
+    lap time between a control lap (typically the fastest lap), and all other selected laps.
+    """
 
     def __init__(self, parent = None):
-        super().__init__(parent)
-        self.openSessions = dict()  # Session Name (str) : Session tab (SessionViewerWidget)
-        self.focusedLapsNumber = 0  # Number of currently focused laps
+        super().__init__(parent=parent)
 
-        layout = QtWidgets.QVBoxLayout()
-        self.setLayout(layout)
-    
-    def addSession(self, session: Session):
-        """Adds a new session to the overview"""
-        tab = SessionOverviewWidget.SessionViewerWidget(session)
-        tab.toggleLapFocus.connect(self._toggleLapFunction)
-        self.openSessions[session.name] = tab
-        self.layout().addWidget(tab)
-    
-    def reset(self):
-        """Resets the widget and clears the displayed sessions"""
-        for sessionTab in self.openSessions.values():
-            self.layout().removeWidget(sessionTab)
-        self.openSessions.clear()
-    
-    def _toggleLapFunction(self, sessionName: str, lapNumber: int, checkState: Qt.CheckState):
-        """Sends a signal that a lap has been toggled, and enables/disables the checkboxes if the maximum focused laps have been reached"""
+        # Laps should be displayed like a tree view based on the telemetry file. These laps can be selected and will be displayed
+        # in the plots. Eg:
 
-        self.toggleLapFocus.emit(sessionName, lapNumber, checkState)
+        # 'race1'
+        #   | Session 1
+        #       | Restart 1
+        #           | Lap 1
+        #           | Lap 2
+        #           | Lap 3
+        #       | Restart 2
+        #           | Lap 1
+        #           | Lap 2
+        #       | Restart 3
+        #           | Lap 1
+        #   | Session 2
+        #       | Restart 1
+        #           | Lap 1
+        #           | Lap 2
+        #           | Lap 3
+        #       | Restart 2
+        #           | Lap 1
+        # 'race2'
+        # etc........
 
-        if checkState is Qt.CheckState.Checked:
-            self.focusedLapsNumber += 1
-            if self.focusedLapsNumber == 6:  # Max focused laps have been reached
-                # Disable all the unchecked checkboxes
-                for sessionWidget in self.openSessions.values():
-                    for checkBox in sessionWidget.lapCheckBoxes:
-                        if checkBox.checkState() is Qt.CheckState.Unchecked:
-                            checkBox.setEnabled(False)
-        else:
-            if self.focusedLapsNumber == 6:
-                # Enable all the checkboxes
-                for sessionWidget in self.openSessions.values():
-                    for checkBox in sessionWidget.lapCheckBoxes:
-                        checkBox.setEnabled(True)
-
-            self.focusedLapsNumber -= 1
-
-    def updateColour(self, focusedLapsDict):
-        """Updates the colour of the checkboxes of the focused laps"""
-        pass
 
 
 class MultiPlotWidget(pg.GraphicsLayoutWidget):
@@ -421,12 +346,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # A simple table to view the raw telemetry data
         self.table = QtWidgets.QTableView()
         self.table.setModel(self.sessionManager)
-        centralTabWidget.addTab(self.table, QIcon(str(parentDir / pathlib.Path("assets/icons/table.png"))), "Telemetry Table")
+        centralTabWidget.addTab(self.table, QIcon(str(parentDir / pathlib.Path("assets/icons/table.png"))), "Table")
 
         # A more involved graph/plot view. Interactive so the user can add or remove different plots, and define what parts of
         # the data they look at
         self.plots = pg.GraphicsLayoutWidget(show=True, title="Telemetry plotting")
-        centralTabWidget.addTab(self.plots, QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Telemetry Plots")
+        centralTabWidget.addTab(self.plots, QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Plots")
         
         # Add the Toolbar and Actions --------------------------
 
@@ -450,24 +375,25 @@ class MainWindow(QtWidgets.QMainWindow):
         fileMenu = menu.addMenu("&File")
         fileMenu.addAction(openNewSessionsAction)
 
-        # Contains actions to open/close the dock widgets
-        viewMenu = menu.addMenu("&View")
-
         # Add the Dock widgets, eg. graph and data table ---------------------
 
         # Session Data Viewer widget
-        sessionOverviewWidget = SessionOverviewWidget(self)
+        dataController = DataControllerWidget(self)
 
         sessionScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
-        sessionScrollArea.setWidget(sessionOverviewWidget)
+        sessionScrollArea.setWidget(dataController)
         sessionScrollArea.setWidgetResizable(True)
         sessionScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
 
-        sessionOverviewDockWidget = QtWidgets.QDockWidget("Session Overview", self)
-        sessionOverviewDockWidget.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        sessionOverviewDockWidget.setWidget(sessionScrollArea)
-        sessionOverviewWidget.setStatusTip("Session Overview: View the select which laps to focus on from each session.")
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, sessionOverviewDockWidget)
+        dataControllerDock = QtWidgets.QDockWidget("Data Controller", self)
+        dataControllerDock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        dataControllerDock.setWidget(sessionScrollArea)
+        dataController.setStatusTip("Data Controller: Choose which laps to view and analyse.")
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dataControllerDock)
+
+        # Contains actions to open/close the dock widgets
+        viewMenu = menu.addMenu("&View")
+        viewMenu.addAction(dataControllerDock.toggleViewAction())
     
     def update(self):
         """Updates the widgets with new information from SessionManager"""

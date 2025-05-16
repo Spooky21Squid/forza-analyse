@@ -1,5 +1,5 @@
 from PyQt6 import QtWidgets, QtMultimedia
-from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl
+from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -41,7 +41,7 @@ class Session(QObject):
         self.data = data
 
 
-class SessionManager(QObject):
+class SessionManager(QAbstractTableModel):
     """Stores and manages all the currently opened Sessions"""
 
     updated = pyqtSignal()  # Emitted when the data is updated with new sessions
@@ -53,6 +53,33 @@ class SessionManager(QObject):
         self.data: pd.DataFrame | None = None  # The data containing all the currently loaded sessions, restarts and laps
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
+        self.summaryTable: pd.DataFrame | None = None
+
+    def data(self, index, role):
+        if role == Qt.ItemDataRole.DisplayRole:
+            if self.data is None:
+                return None
+            value = self.data.iloc[index.row(), index.column()]
+            return str(value)
+    
+    def rowCount(self, index):
+        if self.data is None:
+            return 0
+        return self.data.shape[0]
+
+    def columnCount(self, index):
+        if self.data is None:
+            return 0
+        return self.data.shape[1]
+
+    def headerData(self, section, orientation, role):
+        # section is the index of the column/row.
+        if role == Qt.ItemDataRole.DisplayRole:
+            if orientation == Qt.Orientation.Horizontal:
+                return str(self.data.columns[section])
+
+            if orientation == Qt.Orientation.Vertical:
+                return str(self.data.index[section])
 
     def openNewSessions(self):
         """Opens and loads the telemetry csv files"""
@@ -65,6 +92,7 @@ class SessionManager(QObject):
 
         # If user presses okay
         if dlg.exec():
+            self.beginResetModel()
             filePathList = dlg.selectedFiles()
             logging.info("Found Files: {}".format(filePathList))
 
@@ -95,8 +123,24 @@ class SessionManager(QObject):
             self.data = tempSessionData
             self.trackOrdinal = tempTrackOrdinal
             self.numberOfSessions = tempNumberOfSessions
+            self.summaryTable = SessionManager._generateSummaryTable(self.data)
 
             self.updated.emit()  # Emit the updated signal after all the files have been uploaded
+            self.endResetModel()
+    
+    @staticmethod
+    def _generateSummaryTable(data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Returns a summary table of the sessions, restarts and laps in the 'data' DataFrame.
+
+        This table will be made of the following columns:
+        filename, session_no, restart_no, lap_no, lap_time
+
+        So it will contain the lap time for each lap, in each restart, in each session, in each file.
+        """
+        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"])["cur_lap_time"].last()
+        logging.info("Summary: \n{}".format(summary))
+        return summary
                     
     @staticmethod
     def _isColumnUnique(series: pd.Series):
@@ -330,11 +374,6 @@ class MultiPlotWidget(QtWidgets.QFrame):
         super().__init__(parent, flags)
     
 
-class StatusLabel(QtWidgets.QLabel):
-    def __init__(self, parent = None):
-        super().__init__(parent=parent, text="No status yet")
-
-
 class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
@@ -351,9 +390,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sessionManager.updated.connect(self.update)
 
         # Central widget ----------------------
-        self.centreLabel = StatusLabel(self)
-        #self.centreLabel.setText(str(self.forzaTrackDetails.loc[873]))
-        self.setCentralWidget(self.centreLabel)
+        #self.centreLabel = QtWidgets.QLabel(self, text="No status yet")
+        #self.setCentralWidget(self.centreLabel)
+
+        self.table = QtWidgets.QTableView()
+        self.table.setModel(self.sessionManager)
+        self.setCentralWidget(self.table)
 
         # Add the Toolbar and Actions --------------------------
 
@@ -402,9 +444,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # Get the track details
         # Get the head and tail
 
-        trackSummary = str(self.sessionManager.trackDetails.loc[int(self.sessionManager.trackOrdinal)])
-        head = str(self.sessionManager.data.head())
-        tail = str(self.sessionManager.data.tail())
+        #trackSummary = str(self.sessionManager.trackDetails.loc[int(self.sessionManager.trackOrdinal)])
+        #summary = self.sessionManager.summaryTable
 
-        self.centreLabel.setText(trackSummary + "\n" + head + "\n" + tail)
+        #self.centreLabel.setText(trackSummary + "\n" + str(summary.head) + "\n" + str(summary.tail))
         self.sessionManager.data.to_csv("test.csv")
+        pass

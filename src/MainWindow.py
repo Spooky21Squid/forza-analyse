@@ -84,7 +84,8 @@ class SessionManager(QObject):
                 else:
                     if self.trackOrdinal != data["track_ordinal"][0]:
                         raise ValueError('Cannot load sessions from {}: contains telemetry data from a different track.'.format(filePath))
-                    pd.concat(self.data, data, axis=0, ignore_index=True)
+                    self.data = pd.concat([self.data, data], axis=0, ignore_index=True)
+                    self.numberOfSessions += data["session_no"].max() + 1
             
             self.updated.emit()  # Emit the updated signal after all the files have been uploaded
                     

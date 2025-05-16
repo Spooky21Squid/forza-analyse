@@ -388,11 +388,15 @@ class SessionOverviewWidget(QtWidgets.QWidget):
         pass
 
 
-class MultiPlotWidget(QtWidgets.QFrame):
+class MultiPlotWidget(pg.GraphicsLayoutWidget):
     """Displays multiple plots generated from the session data."""
+    def __init__(self, parent=None, show=False, size=None, title=None, **kargs):
+        super().__init__(parent, show, size, title, **kargs)
 
-    def __init__(self, parent = ..., flags = ...):
-        super().__init__(parent, flags)
+        self.plots = []
+    
+    def addPlot(self):
+        ...
     
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -410,14 +414,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sessionManager = SessionManager(self.forzaTrackDetails, self)
         self.sessionManager.updated.connect(self.update)
 
-        # Central widget ----------------------
-        #self.centreLabel = QtWidgets.QLabel(self, text="No status yet")
-        #self.setCentralWidget(self.centreLabel)
+        # Central widget is a Tab Widget, user can select from a number of different ways to view the telemetry data
+        centralTabWidget = QtWidgets.QTabWidget()
+        self.setCentralWidget(centralTabWidget)
 
+        # A simple table to view the raw telemetry data
         self.table = QtWidgets.QTableView()
         self.table.setModel(self.sessionManager)
-        self.setCentralWidget(self.table)
+        centralTabWidget.addTab(self.table, QIcon(str(parentDir / pathlib.Path("assets/icons/table.png"))), "Telemetry Table")
 
+        # A more involved graph/plot view. Interactive so the user can add or remove different plots, and define what parts of
+        # the data they look at
+        self.plots = pg.GraphicsLayoutWidget(show=True, title="Telemetry plotting")
+        centralTabWidget.addTab(self.plots, QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Telemetry Plots")
+        
         # Add the Toolbar and Actions --------------------------
 
         toolbar = QtWidgets.QToolBar()

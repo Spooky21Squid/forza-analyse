@@ -98,12 +98,14 @@ class SessionManager(QAbstractTableModel):
             tempSessionData = None  # Temporarily load sessions into here so the current sessions aren't overwritten before all files have been checked
             tempNumberOfSessions = 0
             tempTrackOrdinal = None
+            data = None
+            fileName = None
 
             for filePath in filePathList:
                 # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
-                data = pd.read_csv(filePath)
-                fileName = pathlib.Path(filePath).resolve().stem
                 try:
+                    data = pd.read_csv(filePath)
+                    fileName = pathlib.Path(filePath).resolve().stem
                     self._processFile(data, fileName, tempNumberOfSessions)
                 except Exception as e:
                     QtWidgets.QMessageBox.critical(self.parent(), "Error", str(e))
@@ -203,15 +205,17 @@ class SessionManager(QAbstractTableModel):
 
         # Data needs to be verified first to check that it's all within a single track (All track_ordinal values need to be equal)
         # and that it contains at least the most basic fields required for this app to work
-        if not self._isColumnUnique(data["track_ordinal"]):
-            raise ValueError('Cannot load {}: contains telemetry data from more than one track. Split the data into separate files and try again.'.format(fileName))
-        
         requiredFields = ["timestamp_ms", "car_ordinal", "dist_traveled", "last_lap_time",
                        "cur_lap_time", "lap_no", "track_ordinal"]
         missingFields = [field for field in requiredFields if field not in data.columns]
         if len(missingFields) > 0:
             errorMessage = "Couldn't load file {} because of missing fields: {}".format(fileName, missingFields)
             raise ValueError(errorMessage)
+        
+        if not self._isColumnUnique(data["track_ordinal"]):
+            if data["track_ordinal"].hasnans:
+                raise ValueError('Cannot load {}: track_ordinal field has missing values. Replace them and try again.'.format(fileName))
+            raise ValueError('Cannot load {}: contains telemetry data from more than one track. Split the data into separate files and try again.'.format(fileName))
 
         # Data needs to be sorted based on Forza's internal timestamp (timestamp_ms), as the order it currently is in may not be reliable
         # (Eg. ordered based on time of collection when UDP is not reliable). As the timestamp may overflow back to 0, this also needs to

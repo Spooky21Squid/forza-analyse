@@ -104,7 +104,12 @@ class SessionManager(QAbstractTableModel):
             for filePath in filePathList:
                 # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
                 try:
-                    data = pd.read_csv(filePath)
+                    data = pd.read_csv(filePath, skip_blank_lines=True)
+
+                    # For now, just drop any row that contains an empty value in any field. In future, this could be sophisticated by only
+                    # dropping rows that have NA values in required columns, or even replacing NA values with guesses/zeros or something useful.
+                    data.dropna()
+
                     fileName = pathlib.Path(filePath).resolve().stem
                     self._processFile(data, fileName, tempNumberOfSessions)
                 except Exception as e:

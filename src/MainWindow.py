@@ -89,10 +89,9 @@ class SessionManager(QAbstractTableModel):
         dlg.setWindowTitle("Open Sessions")
         dlg.setFileMode(QtWidgets.QFileDialog.FileMode.ExistingFiles)
         dlg.setNameFilter("*.csv")
-
+        
         # If user presses okay
         if dlg.exec():
-            self.beginResetModel()
             filePathList = dlg.selectedFiles()
             logging.info("Found Files: {}".format(filePathList))
 
@@ -104,7 +103,11 @@ class SessionManager(QAbstractTableModel):
                 # Read the csv file into a pandas DataFrame and attempt to add the sessions contained within to the Session Manager
                 data = pd.read_csv(filePath)
                 fileName = pathlib.Path(filePath).resolve().stem
-                self._processFile(data, fileName, tempNumberOfSessions)
+                try:
+                    self._processFile(data, fileName, tempNumberOfSessions)
+                except Exception as e:
+                    QtWidgets.QMessageBox.critical(self.parent(), "Error", str(e))
+                    return
 
                 # If this is the first file to be loaded into the Session Manager, use it to initialise useful values such as
                 # the number of sessions, details about the track etc.
@@ -120,6 +123,7 @@ class SessionManager(QAbstractTableModel):
                     tempNumberOfSessions += data["session_no"].max() + 1
             
             # All sessions were loaded successfull, now replace the currently loaded sessions with new ones
+            self.beginResetModel()
             self.data = tempSessionData
             self.trackOrdinal = tempTrackOrdinal
             self.numberOfSessions = tempNumberOfSessions
@@ -184,7 +188,7 @@ class SessionManager(QAbstractTableModel):
     def _processFile(self, data: pd.DataFrame, fileName: str, numberOfExistingSessions = 0):
         """Sorts, cleans, formats and groups the telemetry data within the 'data' DataFrame so it can be added to the Session Manager"""
 
-        logging.info("Unsorted Data:\n{}\n{}\n".format(data.head(), data.tail()))
+        #logging.info("Unsorted Data:\n{}\n{}\n".format(data.head(), data.tail()))
 
         # A Session is defined as a continuous period of practice at a single track with a single car. Sessions organise telemetry data into
         # a sequence of restarts.
@@ -198,8 +202,16 @@ class SessionManager(QAbstractTableModel):
         # of the circuit.
 
         # Data needs to be verified first to check that it's all within a single track (All track_ordinal values need to be equal)
+        # and that it contains at least the most basic fields required for this app to work
         if not self._isColumnUnique(data["track_ordinal"]):
-            raise ValueError('Cannot load session: contains telemetry data from more than one track. Split the data into separate files and try again.')
+            raise ValueError('Cannot load {}: contains telemetry data from more than one track. Split the data into separate files and try again.'.format(fileName))
+        
+        requiredFields = ["timestamp_ms", "car_ordinal", "dist_traveled", "last_lap_time",
+                       "cur_lap_time", "lap_no", "track_ordinal"]
+        missingFields = [field for field in requiredFields if field not in data.columns]
+        if len(missingFields) > 0:
+            errorMessage = "Couldn't load file {} because of missing fields: {}".format(fileName, missingFields)
+            raise ValueError(errorMessage)
 
         # Data needs to be sorted based on Forza's internal timestamp (timestamp_ms), as the order it currently is in may not be reliable
         # (Eg. ordered based on time of collection when UDP is not reliable). As the timestamp may overflow back to 0, this also needs to

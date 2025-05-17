@@ -56,10 +56,24 @@ class SessionManager(QAbstractTableModel):
         self.trackOrdinal: int | None = None
         self.summaryTable: pd.DataFrame | None = None
 
-    def getLapData(self, filename, session_no, restart_no, lap_no):
-        """Returns all the rows from a single lap when given the lap number, restart number,
-        session number and filename of the lap. All 4 of these parameters together uniquely identify a lap."""
-        return self.telemetry.loc[(self.telemetry["filename"] == filename) & (self.telemetry["session_no"] == session_no) & (self.telemetry["restart_no"] == restart_no) & (self.telemetry["lap_no"] == lap_no)]
+    def getLapData(self, filename, session_no, restart_no, lap_no, includeNegativeDistance = False):
+        """
+        Returns all the rows from a single lap when given the lap number, restart number,
+        session number and filename of the lap. All 4 of these parameters together uniquely identify a lap.
+
+        Paramaters
+        ----------
+        filename : The value to look for in the 'filename' field
+        session_no : The value to look for in the 'session_no' field
+        restart_no : The value to look for in the 'restart_no' field
+        lap_no : The value to look for in the 'lap_no' field
+        includeNegativeDistance : If True, rows that contain a negative value for dist_traveled will be returned.
+        """
+
+        if includeNegativeDistance:
+            return self.telemetry.loc[(self.telemetry["filename"] == filename) & (self.telemetry["session_no"] == session_no) & (self.telemetry["restart_no"] == restart_no) & (self.telemetry["lap_no"] == lap_no)]
+        else:
+            return self.telemetry.loc[(self.telemetry["filename"] == filename) & (self.telemetry["session_no"] == session_no) & (self.telemetry["restart_no"] == restart_no) & (self.telemetry["lap_no"] == lap_no) & (self.telemetry["dist_traveled"] >= 0)]
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
@@ -275,6 +289,19 @@ class SessionManager(QAbstractTableModel):
         # Add a filename column to identify which file the sessions came from
         data["filename"] = [fileName for i in range(0, data.shape[0])]
 
+        # Add a cur_lap_distance field to show how far around the lap a player has traveled. This is computed from the
+        # dist_traveled field, and the length of the track from the trackDetails DataFrame.
+        trackOrdinal = int(data["track_ordinal"][0])
+        
+        # Make sure that track is in the trackDetails DataFrame. If not, the user needs to update the track-details.csv file with the new track.
+        assert trackOrdinal in self.trackDetails.index, f"Track {trackOrdinal} could not be located. Make sure the track-details.csv file is up to date."
+
+        # Get the length of a lap
+        trackLength = self.trackDetails.at[trackOrdinal, "length"]
+
+        # Create the new column
+        data["cur_lap_distance"] = [curDistance % trackLength for curDistance in data["dist_traveled"]]
+
         # Restarts can be discarded if they have less than one complete lap
         # ie. if the only unique lap in that restart is 0, and the last row's dist_traveled value is much less than the track's distance
 
@@ -374,7 +401,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 filename = self.sessionManager.telemetry["filename"][0]
                 session_no = self.sessionManager.telemetry["session_no"][0]
                 restart_no = self.sessionManager.telemetry["restart_no"][0]
-                lap_no = self.sessionManager.telemetry["lap_no"][4016]
+                lap_no = self.sessionManager.telemetry["lap_no"][0]
                 lapData = self.sessionManager.getLapData(filename, session_no, restart_no, lap_no).reset_index()
 
                 logging.info("Lap Data for Plot:\n{}".format(lapData))
@@ -473,4 +500,4 @@ class MainWindow(QtWidgets.QMainWindow):
         #    self.sessionManager.telemetry.loc[(self.sessionManager.telemetry["lap_no"] == 1) & (self.sessionManager.telemetry["dist_traveled"] < 1950)])
         #    )
 
-        self.plots.addNewPlot("simple", "dist_traveled", "speed")
+        self.plots.addNewPlot("simple", "cur_lap_distance", "speed")

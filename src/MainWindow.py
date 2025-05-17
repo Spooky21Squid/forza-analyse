@@ -1,6 +1,6 @@
 from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
@@ -418,6 +418,31 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.plots.append(newPlot)
     
 
+class DataTreeModel(QStandardItemModel):
+    """A model to represent the laps stored by the Session Manager as a Tree"""
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+
+
+class TreeDock(QtWidgets.QDockWidget):
+    """A dock widget that displays an overview of the currently loaded laps as a tree view"""
+    def __init__(self, sessionManager: SessionManager, parent=None):
+        super().__init__("Tree View", parent=parent)
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setStatusTip("Data Tree: Choose which laps to view and analyse.")
+        self.sessionManager: SessionManager = sessionManager
+
+        self.dataView = QtWidgets.QTreeView()
+        self.dataModel = DataTreeModel()
+        self.dataView.setModel(self.dataModel)
+
+        self.setWidget(self.dataView)
+    
+    def update():
+        """Updates the tree view and model with new telemetry data from the Session Manager"""
+        ...
+
+
 class MainWindow(QtWidgets.QMainWindow):
 
     def __init__(self):
@@ -472,23 +497,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 
-        # Session Data Viewer widget
-        dataController = DataControllerWidget(self)
-
-        sessionScrollArea = QtWidgets.QScrollArea()  # Put the plots in this to make it scrollable
-        sessionScrollArea.setWidget(dataController)
-        sessionScrollArea.setWidgetResizable(True)
-        sessionScrollArea.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
-
-        dataControllerDock = QtWidgets.QDockWidget("Data Controller", self)
-        dataControllerDock.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        dataControllerDock.setWidget(sessionScrollArea)
-        dataController.setStatusTip("Data Controller: Choose which laps to view and analyse.")
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dataControllerDock)
+        self.treeDock = TreeDock(self.sessionManager)
+        self.sessionManager.updated.connect(self.treeDock.update)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.treeDock)
 
         # Contains actions to open/close the dock widgets
         viewMenu = menu.addMenu("&View")
-        viewMenu.addAction(dataControllerDock.toggleViewAction())
+        #viewMenu.addAction(dataControllerDock.toggleViewAction())
     
     def update(self):
         """Updates the widgets with new information from SessionManager"""

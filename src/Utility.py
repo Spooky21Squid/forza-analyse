@@ -3,6 +3,7 @@
 from PyQt6.QtMultimedia import QCameraFormat
 import socket
 from math import floor
+from typing import Literal
 
 class ColourPicker():
     """A class to manage the use of the 6 primary colours through their Hue values"""
@@ -65,7 +66,7 @@ class ForzaSettings():
     """Static Forza settings"""
 
     # All possible parameters sent by Forza data out in order
-    params = [
+    params = Literal[
         'is_race_on', 'timestamp_ms',
         'engine_max_rpm', 'engine_idle_rpm', 'current_engine_rpm',
         'acceleration_x', 'acceleration_y', 'acceleration_z',

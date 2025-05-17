@@ -20,6 +20,7 @@ import socket
 from enum import Enum
 from collections import OrderedDict
 from abc import ABC, abstractmethod
+from typing import Literal
 
 
 class Session(QObject):
@@ -54,6 +55,11 @@ class SessionManager(QAbstractTableModel):
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
         self.summaryTable: pd.DataFrame | None = None
+
+    def getLapData(self, filename, session_no, restart_no, lap_no):
+        """Returns all the rows from a single lap when given the lap number, restart number,
+        session number and filename of the lap. All 4 of these parameters together uniquely identify a lap."""
+        return self.telemetry.loc[(self.telemetry["filename"] == filename) & (self.telemetry["session_no"] == session_no) & (self.telemetry["restart_no"] == restart_no) & (self.telemetry["lap_no"] == lap_no)]
 
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
@@ -312,16 +318,77 @@ class DataControllerWidget(QtWidgets.QWidget):
         # etc........
 
 
-
 class MultiPlotWidget(pg.GraphicsLayoutWidget):
     """Displays multiple plots generated from the session data."""
+
+    _PlotTypes = Literal["delta", "simple"]
+
     def __init__(self, parent=None, show=False, size=None, title=None, **kargs):
         super().__init__(parent, show, size, title, **kargs)
 
+        self.sessionManager: SessionManager | None = None
         self.plots = []
     
-    def addPlot(self):
-        ...
+    def setSessionManager(self, sessionManager: SessionManager):
+        """Sets the session manager to get telemetry data from. Resets the plot widget."""
+        self.sessionManager = sessionManager
+        self.reset()
+    
+    def reset(self):
+        """Resets the plots"""
+        self.clear()  # Removes all items from the layout and resets current column and row to 0
+        self.plots.clear()  # Remove all the plots from the plot list
+    
+    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.params, yAxis: Utility.ForzaSettings.params):
+        """
+        Adds a new type of plot to the widget displaying all the currently selected laps. Plots can be chosen from a
+        predefined list defined by the _PlotTypes literal. Some plots require x and y values to be provided, while others do not.
+        The following plot types DO NOT require x and y values:
+        - delta
+        
+        Parameters
+        ----------
+        plotType : The type of plot to add from a predefined list of plot types
+        yAxisValues : The field to use for the Y Axis of the new plot
+        xAxisValues : The field to use for the X Axis of the new plot
+        """
+
+        assert SessionManager is not None, "Error: Cannot add a plot before telemetry data has been loaded"
+
+        newPlot: pg.PlotItem = self.addPlot()
+        
+        match plotType:
+            case "simple":
+                # A simple line graph using the fields specified as the x and y axis
+                
+                # Check that the telemetry data includes the fields that were asked for
+                assert yAxis in self.sessionManager.telemetry.columns, f"Error: {yAxis} field not found in telemetry data."
+                assert xAxis in self.sessionManager.telemetry.columns, f"Error: {xAxis} field not found in telemetry data."
+                
+                newPlot.setTitle(f"Simple {yAxis}/{xAxis} Plot")
+                newPlot.setLabel(axis="left", text=yAxis.capitalize())
+                newPlot.setLabel(axis="bottom", text=xAxis.capitalize())
+                newPlot.showGrid(True, True, 0.5)
+                
+                # Hardcoded for testing - get the details from the first packet in the telemetry data and use that lap only for now
+                filename = self.sessionManager.telemetry["filename"][0]
+                session_no = self.sessionManager.telemetry["session_no"][0]
+                restart_no = self.sessionManager.telemetry["restart_no"][0]
+                lap_no = self.sessionManager.telemetry["lap_no"][4016]
+                lapData = self.sessionManager.getLapData(filename, session_no, restart_no, lap_no).reset_index()
+
+                logging.info("Lap Data for Plot:\n{}".format(lapData))
+
+                xValues = lapData[xAxis]
+                yValues = lapData[yAxis]
+                newPlot.plot(xValues, yValues)
+
+            case "delta":
+                ...
+            case _:
+                ...
+        
+        self.plots.append(newPlot)
     
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -350,7 +417,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # A more involved graph/plot view. Interactive so the user can add or remove different plots, and define what parts of
         # the data they look at
-        self.plots = pg.GraphicsLayoutWidget(show=True, title="Telemetry plotting")
+        self.plots = MultiPlotWidget(show=True, title="Telemetry Plotting")
+        self.plots.setSessionManager(self.sessionManager)
         centralTabWidget.addTab(self.plots, QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Plots")
         
         # Add the Toolbar and Actions --------------------------
@@ -397,13 +465,12 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def update(self):
         """Updates the widgets with new information from SessionManager"""
-        
-        # Get the track details
-        # Get the head and tail
+        # Purely used as a convenience for testing right now
 
-        #trackSummary = str(self.sessionManager.trackDetails.loc[int(self.sessionManager.trackOrdinal)])
-        #summary = self.sessionManager.summaryTable
+        #self.sessionManager.telemetry.to_csv("test.csv")
 
-        #self.centreLabel.setText(trackSummary + "\n" + str(summary.head) + "\n" + str(summary.tail))
-        self.sessionManager.telemetry.to_csv("test.csv")
-        pass
+        #logging.info("Testing Data: {}".format(
+        #    self.sessionManager.telemetry.loc[(self.sessionManager.telemetry["lap_no"] == 1) & (self.sessionManager.telemetry["dist_traveled"] < 1950)])
+        #    )
+
+        self.plots.addNewPlot("simple", "dist_traveled", "speed")

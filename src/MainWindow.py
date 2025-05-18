@@ -151,26 +151,58 @@ class SessionManager(QAbstractTableModel):
             
             # All sessions were loaded successfull, now replace the currently loaded sessions with new ones
             self.beginResetModel()
-            self.telemetry = tempSessionData
+            self.telemetry = tempSessionData.reset_index()
             self.trackOrdinal = tempTrackOrdinal
             self.numberOfSessions = tempNumberOfSessions
-            self.summaryTable = SessionManager._generateSummaryTable(self.telemetry)
-
-            self.updated.emit()  # Emit the updated signal after all the files have been uploaded
             self.endResetModel()
+
+            trackLength = self.trackDetails.at[self.trackOrdinal, "length"]
+            #self.summaryTable = SessionManager._generateSummaryTable(self.telemetry, trackLength)
+            self.updated.emit()  # Emit the updated signal after all the files have been uploaded
     
     @staticmethod
-    def _generateSummaryTable(data: pd.DataFrame) -> pd.DataFrame:
+    def _generateSummaryTable(data: pd.DataFrame, lapDistance: int) -> pd.DataFrame:
         """
-        Returns a summary table of the sessions, restarts and laps in the 'data' DataFrame.
+        Returns a groupby object that groups all the VALID currently loaded laps by their filename, session
+        number, and restart number. A lap is valid if the maximum lap distance reached was close to the track's
+        lap distance, given by the lapDistance parameter.
 
         This table will be made of the following columns:
         filename, session_no, restart_no, lap_no, lap_time
 
         So it will contain the lap time for each lap, in each restart, in each session, in each file.
         """
-        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"])["cur_lap_time"].last()
-        logging.info("Summary: \n{}".format(summary))
+
+        def filterFunc(x, lapDistance):
+            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
+            last packet's distance was close to the length of the track lap."""
+            tolerance = 5  # metres either side of the lap distance is considered a valid lap
+            distanceManaged = x["cur_lap_distance"].iat[-1]
+
+            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
+
+        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))#.groupby(["filename", "session_no", "restart_no", "lap_no"])
+        #summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : (x["cur_lap_distance"].last() > lapDistance - tolerance or x["cur_lap_distance"].last() < lapDistance + tolerance)).groupby(["filename", "session_no", "restart_no", "lap_no"])          #["cur_lap_time"].last()
+        logging.info("Summary Time:\n{}".format(summary["cur_lap_time"].iat[-1]))
+        logging.info("Summary Dist:\n{}".format(summary["cur_lap_distance"].iat[-1]))
+        #logging.info("Summary:\n{}".format(summary))
+
+        
+        #logging.info("Groups:\n{}".format(summary.groups))
+
+        #seriesDataFrame = summary["cur_lap_time"].last().to_frame()
+        logging.info("Testing iterating through each group in the data DataFrame:\n")
+
+        for filename, fileGroup in summary.groupby("filename"):
+            logging.info(f"Filename: {filename}")
+            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
+                logging.info(f"Session No: {sessionNo}")
+                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
+                    logging.info(f"Restart No: {restartNo}")
+                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
+                        logging.info(f"Lap No: {lapNo}")
+                        print(lapGroup["cur_lap_time"].iat[-1])
+                        
         return summary
                     
     @staticmethod
@@ -299,8 +331,8 @@ class SessionManager(QAbstractTableModel):
         # Get the length of a lap
         trackLength = self.trackDetails.at[trackOrdinal, "length"]
 
-        # Create the new column
-        data["cur_lap_distance"] = [curDistance % trackLength for curDistance in data["dist_traveled"]]
+        # Create the new column using modulo, unless dist_traveled is negative then set to 0
+        data["cur_lap_distance"] = [curDistance % trackLength if curDistance >= 0 else 0 for curDistance in data["dist_traveled"]]
 
         # Restarts can be discarded if they have less than one complete lap
         # ie. if the only unique lap in that restart is 0, and the last row's dist_traveled value is much less than the track's distance
@@ -404,7 +436,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 lap_no = self.sessionManager.telemetry["lap_no"][0]
                 lapData = self.sessionManager.getLapData(filename, session_no, restart_no, lap_no).reset_index()
 
-                logging.info("Lap Data for Plot:\n{}".format(lapData))
+                #logging.info("Lap Data for Plot:\n{}".format(lapData))
 
                 xValues = lapData[xAxis]
                 yValues = lapData[yAxis]
@@ -438,9 +470,38 @@ class TreeDock(QtWidgets.QDockWidget):
 
         self.setWidget(self.dataView)
     
-    def update():
+    def update(self):
         """Updates the tree view and model with new telemetry data from the Session Manager"""
-        ...
+        data = self.sessionManager.telemetry
+        lapDistance = self.sessionManager.trackDetails.at[self.sessionManager.trackOrdinal, "length"]
+        
+        def filterFunc(x, lapDistance):
+            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
+            last packet's distance was close to the length of the track lap."""
+            tolerance = 5  # metres either side of the lap distance is considered a valid lap
+            distanceManaged = x["cur_lap_distance"].iat[-1]
+
+            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
+
+        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
+
+        # Create a dictionary overview of the structure of the telemetry
+        structure = {}
+        for filename, fileGroup in summary.groupby("filename"):
+            #logging.info(f"Filename: {filename}")
+            structure[filename] = {}
+            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
+                #logging.info(f"Session No: {sessionNo}")
+                structure[filename][sessionNo] = {}
+                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
+                    #logging.info(f"Restart No: {restartNo}")
+                    structure[filename][sessionNo][restartNo] = {}
+                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
+                        #logging.info(f"Lap No: {lapNo}")
+                        print(lapGroup["cur_lap_time"].iat[-1])
+                        structure[filename][sessionNo][restartNo][lapNo] = lapGroup["cur_lap_time"].iat[-1]
+        
+        logging.info(f"Structure: \n{structure}")
 
 
 class MainWindow(QtWidgets.QMainWindow):

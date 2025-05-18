@@ -1,6 +1,6 @@
 from PyQt6 import QtWidgets, QtMultimedia
-from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem
+from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel, QItemSelection
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
@@ -17,6 +17,7 @@ import yaml
 import logging
 import select
 import socket
+import random
 from enum import Enum
 from collections import OrderedDict
 from abc import ABC, abstractmethod
@@ -456,7 +457,49 @@ class DataTreeModel(QStandardItemModel):
         super().__init__(parent=parent)
 
 
+class TreeDataItem(QStandardItem):
+    """A common item class for the tree view"""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.setEditable(False)  # Don't want the user to be able to edit cells
+        self.setSelectable(False)
+
+
+class GroupDataItem(TreeDataItem):
+    """An item class for all the groups that a lap is under in the tree view"""
+
+    def __init__(self, text):
+        super().__init__(text)
+
+
+class LapDataItem(TreeDataItem):
+    """A specific item class for laps in the tree view"""
+
+    # The colour choices available for the lap colour when selected
+    ColourChoices = Literal["red", "green", "blue", "cyan", "magenta", "yellow"]
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.setSelectable(True)
+        
+    def assignColour(self, colour: ColourChoices):
+        """Adds an icon next to the Item with the selected colour"""
+        pm = QPixmap(16, 16)
+        pm.fill(QColor(colour))
+        icon = QIcon(pm)
+        self.setIcon(icon)
+    
+    def removeColour(self):
+        """Removes the coloured icon from the Item"""
+        self.setIcon(QIcon())
+
+
 class TreeDock(QtWidgets.QDockWidget):
+
+    # The colour choices available for the lap icon/colour when selected
+    LapColourChoices = Literal["red", "green", "blue", "cyan", "magenta", "yellow"]
+
     """A dock widget that displays an overview of the currently loaded laps as a tree view"""
     def __init__(self, sessionManager: SessionManager, parent=None):
         super().__init__("Tree View", parent=parent)
@@ -465,19 +508,43 @@ class TreeDock(QtWidgets.QDockWidget):
         self.sessionManager: SessionManager = sessionManager
 
         self.dataView = QtWidgets.QTreeView()
-        self.dataModel = DataTreeModel()
+
+        # Multiple laps can be selected at once
+        self.dataView.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
+
+        self.dataModel = QStandardItemModel()  # QStandardItemModel
         self.dataView.setModel(self.dataModel)
         self.setWidget(self.dataView)
 
-        self.dataView.doubleClicked.connect(self.doSomething)
+        self.dataView.clicked.connect(self.doSomething)
+        self.dataView.selectionModel().selectionChanged.connect(self.lapSelectionChanged)
     
+    def getIcon(colour: LapColourChoices) -> QIcon:
+        """Returns an icon next to the Item with the selected colour"""
+        pm = QPixmap(16, 16)
+        pm.fill(QColor(colour))
+        icon = QIcon(pm)
+        return icon
+    
+    def lapSelectionChanged(self, selected: QItemSelection, deselected: QItemSelection):
+        logging.info(f"Selected: {[item.data() for item in selected.indexes()]}")
+        logging.info(f"Deselected: {[item.data() for item in deselected.indexes()]}")
+
+        for index in selected.indexes():
+            item = index.model().itemFromIndex(index)
+            item.setIcon(TreeDock.getIcon(random.choice(["red", "green", "blue", "cyan", "magenta", "yellow"])))
+        
+        for index in deselected.indexes():
+            item = index.model().itemFromIndex(index)
+            item.setIcon(QIcon())
+
 
     def doSomething(self, val):
         """Do something"""
+        print(f"Val: {val}")
         print(f"Data: {val.data()}")
         print(f"Row: {val.row()}")
         print(f"Column: {val.column()}")
-
     
     def update(self):
         """Updates the tree view and model with new telemetry data from the Session Manager"""
@@ -506,26 +573,26 @@ class TreeDock(QtWidgets.QDockWidget):
         for filename, fileGroup in summary.groupby("filename"):
             #logging.info(f"Filename: {filename}")
             structure[filename] = {}
-            filenameItem = QStandardItem(str(filename))
+            filenameItem = GroupDataItem(str(filename))
             root.appendRow(filenameItem)
             
             for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
                 #logging.info(f"Session No: {sessionNo}")
                 structure[filename][sessionNo] = {}
-                sessionItem = QStandardItem("Session " + str(sessionNo))
+                sessionItem = GroupDataItem("Session " + str(sessionNo))
                 filenameItem.appendRow(sessionItem)
 
                 for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
                     #logging.info(f"Restart No: {restartNo}")
                     structure[filename][sessionNo][restartNo] = {}
-                    restartItem = QStandardItem("Restart " + str(restartNo))
+                    restartItem = GroupDataItem("Restart " + str(restartNo))
                     sessionItem.appendRow(restartItem)
 
                     for lapNo, lapGroup in restartGroup.groupby("lap_no"):
                         #logging.info(f"Lap No: {lapNo}")
                         #print(lapGroup["cur_lap_time"].iat[-1])
                         structure[filename][sessionNo][restartNo][lapNo] = lapGroup["cur_lap_time"].iat[-1]
-                        lapItem = QStandardItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
+                        lapItem = LapDataItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
                         restartItem.appendRow(lapItem)
         
         self.dataModel.endResetModel()

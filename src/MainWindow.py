@@ -467,11 +467,24 @@ class TreeDock(QtWidgets.QDockWidget):
         self.dataView = QtWidgets.QTreeView()
         self.dataModel = DataTreeModel()
         self.dataView.setModel(self.dataModel)
-
         self.setWidget(self.dataView)
+
+        self.dataView.doubleClicked.connect(self.doSomething)
+    
+
+    def doSomething(self, val):
+        """Do something"""
+        print(f"Data: {val.data()}")
+        print(f"Row: {val.row()}")
+        print(f"Column: {val.column()}")
+
     
     def update(self):
         """Updates the tree view and model with new telemetry data from the Session Manager"""
+
+        # This whole function is a horrifying mess but it works well enough. At some point it really needs a refactor, actually
+        # using some of Pandas' methods for grouping, filtering and iterating through groups properly
+
         data = self.sessionManager.telemetry
         lapDistance = self.sessionManager.trackDetails.at[self.sessionManager.trackOrdinal, "length"]
         
@@ -480,27 +493,42 @@ class TreeDock(QtWidgets.QDockWidget):
             last packet's distance was close to the length of the track lap."""
             tolerance = 5  # metres either side of the lap distance is considered a valid lap
             distanceManaged = x["cur_lap_distance"].iat[-1]
-
             return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
 
+        # Group the packets together into individual laps and filter for complete laps only
         summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
 
-        # Create a dictionary overview of the structure of the telemetry
+        # Create a dictionary overview of the structure of the telemetry, and add data items to the tree model
         structure = {}
+        self.dataModel.beginResetModel()
+        root = self.dataModel.invisibleRootItem()
+
         for filename, fileGroup in summary.groupby("filename"):
             #logging.info(f"Filename: {filename}")
             structure[filename] = {}
+            filenameItem = QStandardItem(str(filename))
+            root.appendRow(filenameItem)
+            
             for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
                 #logging.info(f"Session No: {sessionNo}")
                 structure[filename][sessionNo] = {}
+                sessionItem = QStandardItem("Session " + str(sessionNo))
+                filenameItem.appendRow(sessionItem)
+
                 for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
                     #logging.info(f"Restart No: {restartNo}")
                     structure[filename][sessionNo][restartNo] = {}
+                    restartItem = QStandardItem("Restart " + str(restartNo))
+                    sessionItem.appendRow(restartItem)
+
                     for lapNo, lapGroup in restartGroup.groupby("lap_no"):
                         #logging.info(f"Lap No: {lapNo}")
-                        print(lapGroup["cur_lap_time"].iat[-1])
+                        #print(lapGroup["cur_lap_time"].iat[-1])
                         structure[filename][sessionNo][restartNo][lapNo] = lapGroup["cur_lap_time"].iat[-1]
+                        lapItem = QStandardItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
+                        restartItem.appendRow(lapItem)
         
+        self.dataModel.endResetModel()
         logging.info(f"Structure: \n{structure}")
 
 

@@ -54,7 +54,8 @@ class DataFrameModel(QAbstractTableModel):
         # section is the index of the column/row.
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                return str(self.frame.columns[section])
+                label = str(self.frame.columns[section]).replace("_", " ").title()
+                return label
 
             if orientation == Qt.Orientation.Vertical:
                 return str(self.frame.index[section])
@@ -88,7 +89,7 @@ class LapDetailsModel(DataFrameModel):
         if role == Qt.ItemDataRole.BackgroundRole:
             if index.column() == 4:
                 value = self.frame.iat[index.row(), index.column()]
-                minLapTime = self.frame["cur_lap_time"].min()
+                minLapTime = self.frame["lap_time"].min()
                 if value == minLapTime:
                     return QColor("purple")
 
@@ -125,7 +126,7 @@ class SessionManager(QObject):
         # Remove the incomplete laps from the telemetry data
         summary = self.telemetry.getDataFrame().groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
         summary = summary.groupby(["filename", "session_no", "restart_no", "lap_no"])["cur_lap_time"].last()
-        self.lapDetails.updateData(summary.reset_index())
+        self.lapDetails.updateData(summary.reset_index().rename(columns={'cur_lap_time': 'lap_time'}))
 
     def updateLapSelection(self, selected: QItemSelection, deselected: QItemSelection):
         """Update the current lap colours dictionary"""
@@ -372,6 +373,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
         self.sessionManager: SessionManager | None = None
         self.plots = []
+        self.laps = []  # A list of displayed laps, organised into tuples of (filename, sessionNo, restartNo, lapNo)
     
     def setSessionManager(self, sessionManager: SessionManager):
         """Sets the session manager to get telemetry data from. Resets the plot widget."""
@@ -383,7 +385,17 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.clear()  # Removes all items from the layout and resets current column and row to 0
         self.plots.clear()  # Remove all the plots from the plot list
     
-    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.params, yAxis: Utility.ForzaSettings.params):
+    def addLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int):
+        """Adds the telemetry from a lap into all of the existing widgets, and tells the widget to include it in all
+        future plots, unless it is removed"""
+        lapData = self.sessionManager.getLapData(filename, sessionNo, restartNo, lapNo).reset_index()
+
+    def removeLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int):
+        """Removes the telemetry from a lap from all of the existing widgets, and tells the widget not to include it in
+        any future widgets until it is added again"""
+        ...
+
+    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.params = None, yAxis: Utility.ForzaSettings.params = None):
         """
         Adds a new type of plot to the widget displaying all the currently selected laps. Plots can be chosen from a
         predefined list defined by the _PlotTypes literal. Some plots require x and y values to be provided, while others do not.
@@ -399,7 +411,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
         assert self.sessionManager is not None, "Error: Cannot add a plot before telemetry data has been loaded"
 
-        newPlot: pg.PlotItem = self.addPlot()
+        newPlot = pg.PlotItem()
         
         match plotType:
             case "simple":
@@ -433,6 +445,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 ...
         
         self.plots.append(newPlot)
+        self.addItem(newPlot)
     
 
 class TreeDataItem(QStandardItem):

@@ -1,5 +1,5 @@
 from PyQt6 import QtWidgets, QtMultimedia
-from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel, QItemSelection
+from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel, QItemSelection, QModelIndex
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
@@ -24,25 +24,6 @@ from abc import ABC, abstractmethod
 from typing import Literal
 
 
-class Session(QObject):
-    """
-    Stores the telemetry data and associated calculated data for a currently opened session. A session
-    represents a single unit of time's worth of continuously logged packets saved as a csv file.
-    """
-
-    def __init__(self, data: pd.DataFrame, name: str, parent = None):
-        super().__init__(parent = parent)
-        self.data: pd.DataFrame = None  # The pandas DataFrame containing the data from the telemetry file
-        self.name = name  # The name for the session
-
-        self.addData(data = data)
-    
-    def addData(self, data: pd.DataFrame):
-        """Updates the Session with new data from a pandas DataFrame. This expects that the data is from a single track only, and
-        collected from a single uninterrupted sequence of laps (eg. the user did not restart in the middle of a session)"""
-        self.data = data
-
-
 class DataFrameModel(QAbstractTableModel):
     """A Table Model representing a pandas DataFrame"""
 
@@ -50,39 +31,66 @@ class DataFrameModel(QAbstractTableModel):
         super().__init__(parent)
 
         # The data that the model will represent
-        self.data: pd.DataFrame | None = None
+        self.frame: pd.DataFrame | None = None
     
     def data(self, index, role):
         if role == Qt.ItemDataRole.DisplayRole:
-            if self.data is None:
+            if self.frame is None:
                 return None
-            value = self.data.iat[index.row(), index.column()]
+            value = self.frame.iat[index.row(), index.column()]
             return str(value)
     
     def rowCount(self, index):
-        if self.data is None:
+        if self.frame is None:
             return 0
-        return self.data.shape[0]
+        return self.frame.shape[0]
 
     def columnCount(self, index):
-        if self.data is None:
+        if self.frame is None:
             return 0
-        return self.data.shape[1]
+        return self.frame.shape[1]
 
     def headerData(self, section, orientation, role):
         # section is the index of the column/row.
         if role == Qt.ItemDataRole.DisplayRole:
             if orientation == Qt.Orientation.Horizontal:
-                return str(self.data.columns[section])
+                return str(self.frame.columns[section])
 
             if orientation == Qt.Orientation.Vertical:
-                return str(self.data.index[section])
+                return str(self.frame.index[section])
 
     def updateData(self, data: pd.DataFrame):
         """Replaces the data currently held in the model with a copy of the supplied DataFrame"""
         self.beginResetModel()
-        self.data = data.copy()
+        self.frame = data.copy()
         self.endResetModel()
+
+    def getDataFrame(self):
+        """Returns the DataFrame"""
+        return self.frame
+
+
+class LapDetailsModel(DataFrameModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+    
+    def data(self, index: QModelIndex, role):
+
+        if self.frame is None:
+                return None
+        
+        if role == Qt.ItemDataRole.DisplayRole:
+            value = self.frame.iat[index.row(), index.column()]
+            if index.column() == 4:
+                value = Utility.formatLapTime(value)
+            return str(value)
+        
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if index.column() == 4:
+                value = self.frame.iat[index.row(), index.column()]
+                minLapTime = self.frame["cur_lap_time"].min()
+                if value == minLapTime:
+                    return QColor("purple")
 
 
 class SessionManager(QObject):
@@ -97,13 +105,10 @@ class SessionManager(QObject):
         self.telemetry: DataFrameModel = DataFrameModel()  # The data containing all the currently loaded sessions, restarts and laps
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
-        self.lapStructureModel: DataFrameModel = DataFrameModel()  # A heirarchical model of the files, sessions, restarts and laps
-        self.lapColours = {}  # A dictionary that mirrors the structure of the lapStructureModel, to store the current colours of the laps
-        self.colourPicker = Utility.ColourPicker()
         
         # A DataFrame containing important details about each lap from the telemetry data that the player completed. It contains:
         # Lap number, restart number, session number, filename, lap time, 
-        self.lapDetails: DataFrameModel = DataFrameModel()
+        self.lapDetails: LapDetailsModel = LapDetailsModel()
     
     def _updateLapDetails(self):
         """Creates a new DataFrame with important details about each completed lap"""
@@ -118,12 +123,18 @@ class SessionManager(QObject):
             return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
 
         # Remove the incomplete laps from the telemetry data
-        summary = self.telemetry.data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
+        summary = self.telemetry.getDataFrame().groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
         summary = summary.groupby(["filename", "session_no", "restart_no", "lap_no"])["cur_lap_time"].last()
         self.lapDetails.updateData(summary.reset_index())
 
     def updateLapSelection(self, selected: QItemSelection, deselected: QItemSelection):
         """Update the current lap colours dictionary"""
+        logging.info(f"Selected: {[s.data() for s in selected.indexes()]}")
+        logging.info(f"Selected: {[f"{s.row()}, {s.column()}" for s in selected.indexes()]}")
+
+        logging.info(f"Deselected: {[s.data() for s in deselected.indexes()]}")
+        logging.info(f"Deselected: {[f"{s.row()}, {s.column()}" for s in deselected.indexes()]}")
+        return
         
         for index in selected.indexes():
             item = index.model().itemFromIndex(index)
@@ -136,55 +147,6 @@ class SessionManager(QObject):
             item.setIcon(QIcon())  # Remove the icon by replacing it with a blank QIcon
 
             # Get the lap number, restart no, session no and filename
-    
-    def _updateLapStructureModel(self):
-        """Updates the heirarchical lap structure model with new data from the telemetry DataFrame and resets the lapColours dictionary"""
-
-        # This whole function is a horrifying mess but it works well enough. At some point it really needs a refactor, actually
-        # using some of Pandas' methods for grouping, filtering and iterating through groups properly
-
-        lapDistance = self.trackDetails.at[self.trackOrdinal, "length"]
-        
-        def filterFunc(x, lapDistance):
-            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
-            last packet's distance was close to the length of the track lap."""
-            tolerance = 5  # metres either side of the lap distance is considered a valid lap
-            distanceManaged = x["cur_lap_distance"].iat[-1]
-            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
-
-        # Group the packets together into individual laps and filter for complete laps only
-        summary = self.telemetry.data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
-
-        # Create a dictionary overview of the structure of the telemetry, and add data items to the tree model by iterating
-        # through each group and adding rows for each lap
-        structure = {}
-        #self.lapStructureModel.clear()
-        self.lapStructureModel.beginResetModel()
-        root = self.lapStructureModel.invisibleRootItem()
-
-        for filename, fileGroup in summary.groupby("filename"):
-            structure[filename] = {}
-            filenameItem = GroupDataItem(str(filename))
-            root.appendRow(filenameItem)
-            
-            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
-                structure[filename][sessionNo] = {}
-                sessionItem = GroupDataItem("Session " + str(sessionNo))
-                filenameItem.appendRow(sessionItem)
-
-                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
-                    structure[filename][sessionNo][restartNo] = {}
-                    restartItem = GroupDataItem("Restart " + str(restartNo))
-                    sessionItem.appendRow(restartItem)
-
-                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
-                        structure[filename][sessionNo][restartNo][lapNo] = ""  # Assign no colour to the lap at first        lapGroup["cur_lap_time"].iat[-1]
-                        lapItem = LapDataItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
-                        restartItem.appendRow(lapItem)
-        
-        logging.info(f"Structure: \n{structure}")
-        self.lapColours = structure  # Set up the lapColours dictionary
-        self.lapStructureModel.endResetModel()
 
     def getLapData(self, filename, session_no, restart_no, lap_no, includeNegativeDistance = False):
         """
@@ -199,7 +161,7 @@ class SessionManager(QObject):
         lap_no : The value to look for in the 'lap_no' field
         includeNegativeDistance : If True, rows that contain a negative value for dist_traveled will be returned.
         """
-        frame = self.telemetry.data
+        frame = self.telemetry.getDataFrame()
         if includeNegativeDistance:
             return frame.loc[(frame["filename"] == filename) & (frame["session_no"] == session_no) & (frame["restart_no"] == restart_no) & (frame["lap_no"] == lap_no)]
         else:
@@ -444,8 +406,8 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 # A simple line graph using the fields specified as the x and y axis
                 
                 # Check that the telemetry data includes the fields that were asked for
-                assert yAxis in self.sessionManager.telemetry.data.columns, f"Error: {yAxis} field not found in telemetry data."
-                assert xAxis in self.sessionManager.telemetry.data.columns, f"Error: {xAxis} field not found in telemetry data."
+                assert yAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {yAxis} field not found in telemetry data."
+                assert xAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {xAxis} field not found in telemetry data."
                 
                 newPlot.setTitle(f"Simple {yAxis}/{xAxis} Plot")
                 newPlot.setLabel(axis="left", text=yAxis.capitalize())
@@ -453,10 +415,10 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 newPlot.showGrid(True, True, 0.5)
                 
                 # Hardcoded for testing - get the details from the first packet in the telemetry data and use that lap only for now
-                filename = self.sessionManager.telemetry.data["filename"][0]
-                session_no = self.sessionManager.telemetry.data["session_no"][0]
-                restart_no = self.sessionManager.telemetry.data["restart_no"][0]
-                lap_no = self.sessionManager.telemetry.data["lap_no"][0]
+                filename = self.sessionManager.telemetry.getDataFrame()["filename"][0]
+                session_no = self.sessionManager.telemetry.getDataFrame()["session_no"][0]
+                restart_no = self.sessionManager.telemetry.getDataFrame()["restart_no"][0]
+                lap_no = self.sessionManager.telemetry.getDataFrame()["lap_no"][0]
                 lapData = self.sessionManager.getLapData(filename, session_no, restart_no, lap_no).reset_index()
 
                 #logging.info("Lap Data for Plot:\n{}".format(lapData))
@@ -511,13 +473,13 @@ class LapDataItem(TreeDataItem):
         self.setIcon(QIcon())
 
 
-class TreeDock(QtWidgets.QDockWidget):
+class LapViewerDock(QtWidgets.QDockWidget):
 
-    """A dock widget that displays an overview of the currently loaded laps as a tree view"""
+    """A dock widget that displays an overview of the currently loaded laps"""
     def __init__(self, sessionManager: SessionManager, parent=None):
-        super().__init__("Tree View", parent=parent)
+        super().__init__("Lap View", parent=parent)
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
-        self.setStatusTip("Data Tree: Choose which laps to view and analyse.")
+        self.setStatusTip("Lap Viewer: Choose which laps to view and analyse.")
 
         self.sessionManager: SessionManager = sessionManager
 
@@ -597,8 +559,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Add the Dock widgets, eg. graph and data table ---------------------
 
-        self.treeDock = TreeDock(self.sessionManager)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.treeDock)
+        self.lapViewerDock = LapViewerDock(self.sessionManager)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.lapViewerDock)
 
         # Contains actions to open/close the dock widgets
         viewMenu = menu.addMenu("&View")

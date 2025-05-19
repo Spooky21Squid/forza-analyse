@@ -55,7 +55,55 @@ class SessionManager(QAbstractTableModel):
         self.telemetry: pd.DataFrame | None = None  # The data containing all the currently loaded sessions, restarts and laps
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
-        self.summaryTable: pd.DataFrame | None = None
+        self.lapStructureModel: QStandardItemModel = QStandardItemModel()  # A heirarchical model of the files, sessions, restarts and laps
+    
+    def updateLapStructureModel(self):
+        """Updates the heirarchical lap structure model with new data from the telemetry DataFrame"""
+
+        # This whole function is a horrifying mess but it works well enough. At some point it really needs a refactor, actually
+        # using some of Pandas' methods for grouping, filtering and iterating through groups properly
+
+        lapDistance = self.trackDetails.at[self.trackOrdinal, "length"]
+        
+        def filterFunc(x, lapDistance):
+            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
+            last packet's distance was close to the length of the track lap."""
+            tolerance = 5  # metres either side of the lap distance is considered a valid lap
+            distanceManaged = x["cur_lap_distance"].iat[-1]
+            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
+
+        # Group the packets together into individual laps and filter for complete laps only
+        summary = self.telemetry.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
+
+        # Create a dictionary overview of the structure of the telemetry, and add data items to the tree model by iterating
+        # through each group and adding rows for each lap
+        structure = {}
+        self.lapStructureModel.beginResetModel()
+        self.lapStructureModel.clear()
+        root = self.lapStructureModel.invisibleRootItem()
+
+        for filename, fileGroup in summary.groupby("filename"):
+            structure[filename] = {}
+            filenameItem = GroupDataItem(str(filename))
+            root.appendRow(filenameItem)
+            
+            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
+                structure[filename][sessionNo] = {}
+                sessionItem = GroupDataItem("Session " + str(sessionNo))
+                filenameItem.appendRow(sessionItem)
+
+                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
+                    structure[filename][sessionNo][restartNo] = {}
+                    restartItem = GroupDataItem("Restart " + str(restartNo))
+                    sessionItem.appendRow(restartItem)
+
+                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
+                        structure[filename][sessionNo][restartNo][lapNo] = lapGroup["cur_lap_time"].iat[-1]
+                        lapItem = LapDataItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
+                        restartItem.appendRow(lapItem)
+        
+        logging.info(f"Structure: \n{structure}")
+        self.lapStructureModel.endResetModel()
 
     def getLapData(self, filename, session_no, restart_no, lap_no, includeNegativeDistance = False):
         """
@@ -157,54 +205,10 @@ class SessionManager(QAbstractTableModel):
             self.numberOfSessions = tempNumberOfSessions
             self.endResetModel()
 
-            trackLength = self.trackDetails.at[self.trackOrdinal, "length"]
-            #self.summaryTable = SessionManager._generateSummaryTable(self.telemetry, trackLength)
-            self.updated.emit()  # Emit the updated signal after all the files have been uploaded
-    
-    @staticmethod
-    def _generateSummaryTable(data: pd.DataFrame, lapDistance: int) -> pd.DataFrame:
-        """
-        Returns a groupby object that groups all the VALID currently loaded laps by their filename, session
-        number, and restart number. A lap is valid if the maximum lap distance reached was close to the track's
-        lap distance, given by the lapDistance parameter.
+            # Update the lap structure model using the new telelemtry DataFrame
+            self.updateLapStructureModel()
 
-        This table will be made of the following columns:
-        filename, session_no, restart_no, lap_no, lap_time
-
-        So it will contain the lap time for each lap, in each restart, in each session, in each file.
-        """
-
-        def filterFunc(x, lapDistance):
-            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
-            last packet's distance was close to the length of the track lap."""
-            tolerance = 5  # metres either side of the lap distance is considered a valid lap
-            distanceManaged = x["cur_lap_distance"].iat[-1]
-
-            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
-
-        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))#.groupby(["filename", "session_no", "restart_no", "lap_no"])
-        #summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : (x["cur_lap_distance"].last() > lapDistance - tolerance or x["cur_lap_distance"].last() < lapDistance + tolerance)).groupby(["filename", "session_no", "restart_no", "lap_no"])          #["cur_lap_time"].last()
-        logging.info("Summary Time:\n{}".format(summary["cur_lap_time"].iat[-1]))
-        logging.info("Summary Dist:\n{}".format(summary["cur_lap_distance"].iat[-1]))
-        #logging.info("Summary:\n{}".format(summary))
-
-        
-        #logging.info("Groups:\n{}".format(summary.groups))
-
-        #seriesDataFrame = summary["cur_lap_time"].last().to_frame()
-        logging.info("Testing iterating through each group in the data DataFrame:\n")
-
-        for filename, fileGroup in summary.groupby("filename"):
-            logging.info(f"Filename: {filename}")
-            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
-                logging.info(f"Session No: {sessionNo}")
-                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
-                    logging.info(f"Restart No: {restartNo}")
-                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
-                        logging.info(f"Lap No: {lapNo}")
-                        print(lapGroup["cur_lap_time"].iat[-1])
-                        
-        return summary
+            self.updated.emit()  # Emit the updated signal after all the files have been uploaded and all data models have been updated
                     
     @staticmethod
     def _isColumnUnique(series: pd.Series):
@@ -451,12 +455,6 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.plots.append(newPlot)
     
 
-class DataTreeModel(QStandardItemModel):
-    """A model to represent the laps stored by the Session Manager as a Tree"""
-    def __init__(self, parent=None):
-        super().__init__(parent=parent)
-
-
 class TreeDataItem(QStandardItem):
     """A common item class for the tree view"""
 
@@ -505,14 +503,16 @@ class TreeDock(QtWidgets.QDockWidget):
         super().__init__("Tree View", parent=parent)
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.setStatusTip("Data Tree: Choose which laps to view and analyse.")
+        
         self.sessionManager: SessionManager = sessionManager
 
+        # This view displays the data from the heirarchical lap structure model found in the Session Manager
         self.dataView = QtWidgets.QTreeView()
 
         # Multiple laps can be selected at once
         self.dataView.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.MultiSelection)
 
-        self.dataModel = QStandardItemModel()  # QStandardItemModel
+        self.dataModel = self.sessionManager.lapStructureModel
         self.dataView.setModel(self.dataModel)
         self.setWidget(self.dataView)
 
@@ -546,58 +546,6 @@ class TreeDock(QtWidgets.QDockWidget):
         print(f"Row: {val.row()}")
         print(f"Column: {val.column()}")
     
-    def update(self):
-        """Updates the tree view and model with new telemetry data from the Session Manager"""
-
-        # This whole function is a horrifying mess but it works well enough. At some point it really needs a refactor, actually
-        # using some of Pandas' methods for grouping, filtering and iterating through groups properly
-
-        data = self.sessionManager.telemetry
-        lapDistance = self.sessionManager.trackDetails.at[self.sessionManager.trackOrdinal, "length"]
-        
-        def filterFunc(x, lapDistance):
-            """Takes a group of packets from a single lap, and returns True if that lap is valid. A lap is valid if the
-            last packet's distance was close to the length of the track lap."""
-            tolerance = 5  # metres either side of the lap distance is considered a valid lap
-            distanceManaged = x["cur_lap_distance"].iat[-1]
-            return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
-
-        # Group the packets together into individual laps and filter for complete laps only
-        summary = data.groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
-
-        # Create a dictionary overview of the structure of the telemetry, and add data items to the tree model
-        structure = {}
-        self.dataModel.beginResetModel()
-        root = self.dataModel.invisibleRootItem()
-
-        for filename, fileGroup in summary.groupby("filename"):
-            #logging.info(f"Filename: {filename}")
-            structure[filename] = {}
-            filenameItem = GroupDataItem(str(filename))
-            root.appendRow(filenameItem)
-            
-            for sessionNo, sessionGroup in fileGroup.groupby("session_no"):
-                #logging.info(f"Session No: {sessionNo}")
-                structure[filename][sessionNo] = {}
-                sessionItem = GroupDataItem("Session " + str(sessionNo))
-                filenameItem.appendRow(sessionItem)
-
-                for restartNo, restartGroup in sessionGroup.groupby("restart_no"):
-                    #logging.info(f"Restart No: {restartNo}")
-                    structure[filename][sessionNo][restartNo] = {}
-                    restartItem = GroupDataItem("Restart " + str(restartNo))
-                    sessionItem.appendRow(restartItem)
-
-                    for lapNo, lapGroup in restartGroup.groupby("lap_no"):
-                        #logging.info(f"Lap No: {lapNo}")
-                        #print(lapGroup["cur_lap_time"].iat[-1])
-                        structure[filename][sessionNo][restartNo][lapNo] = lapGroup["cur_lap_time"].iat[-1]
-                        lapItem = LapDataItem(f"Lap {str(lapNo)}: {Utility.formatLapTime(lapGroup["cur_lap_time"].iat[-1])}")
-                        restartItem.appendRow(lapItem)
-        
-        self.dataModel.endResetModel()
-        logging.info(f"Structure: \n{structure}")
-
 
 class MainWindow(QtWidgets.QMainWindow):
 
@@ -654,7 +602,6 @@ class MainWindow(QtWidgets.QMainWindow):
         # Add the Dock widgets, eg. graph and data table ---------------------
 
         self.treeDock = TreeDock(self.sessionManager)
-        self.sessionManager.updated.connect(self.treeDock.update)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.treeDock)
 
         # Contains actions to open/close the dock widgets

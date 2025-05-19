@@ -1,6 +1,7 @@
 # A collection of utility functions
 
 from PyQt6.QtMultimedia import QCameraFormat
+from PyQt6.QtGui import QIcon, QColor, QPixmap
 import socket
 from math import floor
 from typing import Literal
@@ -52,6 +53,16 @@ class ColourPicker():
     def reset(self):
         """Resets the colour picker"""
         self._populate()
+
+
+class BlockColourIcon(QIcon):
+    """A QIcon containing a single block of colour"""
+
+    def __init__(self, colour: str):
+        self.colour = colour
+        pm = QPixmap(16, 16)
+        pm.fill(QColor(colour))
+        super().__init__(pm)
 
 
 def getIP():

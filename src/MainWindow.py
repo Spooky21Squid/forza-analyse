@@ -1,6 +1,6 @@
 from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel, QItemSelection, QModelIndex
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap, QPen
 from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
@@ -363,6 +363,59 @@ class SessionManager(QObject):
         # This is needed to set an accurate lap time for the previous lap
 
 
+class LapPlotItem(pg.PlotItem):
+    def __init__(self, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+        super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+
+        # A dictionary of tuples : PlotDataItem. Each key is a unique tuple and identifies the PlotDataItem value (or line) that
+        # it is associated with
+        self.lineDict = {}
+
+        @abstractmethod
+        def addLap(self, lap, xValues, yValues, xLabel=None, yLabel=None, colour="white"):
+            """Adds a new lap to the plot. Implement this method for each new plot type to customise its behaviour"""
+        
+        @abstractmethod
+        def removeLap(self, lap):
+            """Removes a lap from the plot given a tuple identifying it. Implement this method for each new plot type to customise its behaviour"""
+
+
+class SimpleLapPlot(LapPlotItem):
+    """Displays a simple line graph"""
+    def __init__(self, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+        super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+
+    def addLap(self, lap, xValues, yValues, xLabel=None, yLabel=None, colour="white"):
+            """
+            Adds a new lap to the plot as a new line. Raises an exception if the lap has already been added.
+            
+            Parameters
+            ----------
+
+            lap : A tuple containing the filename, session_no, restart_no and lap_no of the lap being added
+            xValues : An array-like object containing the values used for the X axis
+            yValues : An array-like object containing the values used for the Y axis
+            xLabel : An optional string to label the X axis
+            yLabel : An optional string to label the Y axis
+            colour : An optional colour as a string to colour the line representing the lap. Default colour is white
+            """
+
+            # If the lap has already been added to the plot, raise error
+            assert lap not in self.lineDict.keys(), f"Cannot add lap {lap} to the plot: Already added."
+
+            pen = pg.mkPen(colour)
+            line = self.plot(xValues, yValues, pen=pen)
+            self.lineDict[lap] = line
+
+    def removeLap(self, lap):
+        """Removes a lap from the plot given a tuple identifying it. Raises an exception if the lap is not in the plot"""
+
+        assert lap in self.lineDict.keys(), "Cannot remove lap {lap} from the plot: doesn't exist."
+
+        line = self.lineDict.pop(lap)
+        self.removeItem(line)
+
+
 class MultiPlotWidget(pg.GraphicsLayoutWidget):
     """Displays multiple plots generated from the session data."""
 
@@ -411,11 +464,12 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
         assert self.sessionManager is not None, "Error: Cannot add a plot before telemetry data has been loaded"
 
-        newPlot = pg.PlotItem()
+        newPlot: LapPlotItem | None = None
         
         match plotType:
             case "simple":
                 # A simple line graph using the fields specified as the x and y axis
+                newPlot = SimpleLapPlot()
                 
                 # Check that the telemetry data includes the fields that were asked for
                 assert yAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {yAxis} field not found in telemetry data."
@@ -437,7 +491,8 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
                 xValues = lapData[xAxis]
                 yValues = lapData[yAxis]
-                newPlot.plot(xValues, yValues)
+                #newPlot.plot(xValues, yValues)
+                newPlot.addLap((filename, session_no, restart_no, lap_no), xValues, yValues)
 
             case "delta":
                 ...

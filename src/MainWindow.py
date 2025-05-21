@@ -8,6 +8,8 @@ import pyqtgraph as pg
 import numpy as np
 import pandas as pd
 
+import distinctipy
+
 from fdp import ForzaDataPacket
 import Utility
 
@@ -98,6 +100,8 @@ class SessionManager(QObject):
     """Stores and manages all the currently opened Sessions"""
 
     updated = pyqtSignal()  # Emitted when the data is updated with new sessions
+    lapSelected = pyqtSignal(str, int, int, int, tuple)  # Emitted when a lap is selected to view, contains filename, session_np, restart_no, lap_no, colour (as an rgb tuple)
+    lapDeselected = pyqtSignal(str, int, int, int)  # Emitted when a lap is deselected, contains filename, session_np, restart_no, lap_no
 
     def __init__(self, trackDetails: pd.DataFrame, parent = None):
         super().__init__(parent)
@@ -110,6 +114,7 @@ class SessionManager(QObject):
         # A DataFrame containing important details about each lap from the telemetry data that the player completed. It contains:
         # Lap number, restart number, session number, filename, lap time, 
         self.lapDetails: LapDetailsModel = LapDetailsModel()
+        self.lapColours = {}  # A dictionary of laps : colour. Keys (laps) are tuples containing (filename, session_no, restart_no, lap_no)
     
     def _updateLapDetails(self):
         """Creates a new DataFrame with important details about each completed lap"""
@@ -129,25 +134,27 @@ class SessionManager(QObject):
         self.lapDetails.updateData(summary.reset_index().rename(columns={'cur_lap_time': 'lap_time'}))
 
     def updateLapSelection(self, selected: QItemSelection, deselected: QItemSelection):
-        """Update the current lap colours dictionary"""
-        logging.info(f"Selected: {[s.data() for s in selected.indexes()]}")
-        logging.info(f"Selected: {[f"{s.row()}, {s.column()}" for s in selected.indexes()]}")
+        """Update the current lap selection"""
+        #logging.info(f"Selected: {[s.data() for s in selected.indexes()]}")
+        #logging.info(f"Selected: {[f"{s.row()}, {s.column()}" for s in selected.indexes()]}")
 
-        logging.info(f"Deselected: {[s.data() for s in deselected.indexes()]}")
-        logging.info(f"Deselected: {[f"{s.row()}, {s.column()}" for s in deselected.indexes()]}")
-        return
-        
-        for index in selected.indexes():
-            item = index.model().itemFromIndex(index)
-            icon = Utility.BlockColourIcon(self.colourPicker.pick())
-            item.setIcon(icon)
-            logging.info(f"Setting: {icon}")
-        
-        for index in deselected.indexes():
-            item = index.model().itemFromIndex(index)
-            item.setIcon(QIcon())  # Remove the icon by replacing it with a blank QIcon
+        #logging.info(f"Deselected: {[s.data() for s in deselected.indexes()]}")
+        #logging.info(f"Deselected: {[f"{s.row()}, {s.column()}" for s in deselected.indexes()]}")
 
-            # Get the lap number, restart no, session no and filename
+        if len(selected.indexes()) > 0:
+            selectedLap = (selected.indexes()[0].data(), int(selected.indexes()[1].data()), int(selected.indexes()[2].data()), int(selected.indexes()[3].data()))
+            existingColours = list(self.lapColours.values())
+            existingColours.append((0.0,0.0,0.0))
+            # Attempt to get a new colour that is as visually distinct from the other lap's colours as possible
+            newColour = distinctipy.get_colors(1, existingColours)[0]  # A (r, g, b) 
+            self.lapColours[selectedLap] = newColour
+            convertedColour = tuple([int(x * 255) for x in newColour])
+            self.lapSelected.emit(*selectedLap, convertedColour)
+        
+        if len(deselected.indexes()) > 0:
+            deselectedLap = (deselected.indexes()[0].data(), int(deselected.indexes()[1].data()), int(deselected.indexes()[2].data()), int(deselected.indexes()[3].data()))
+            self.lapDeselected.emit(*deselectedLap)
+            self.lapColours.pop(deselectedLap)
 
     def getLapData(self, filename, session_no, restart_no, lap_no, includeNegativeDistance = False):
         """
@@ -372,7 +379,7 @@ class LapPlotItem(pg.PlotItem):
         self.lineDict = {}
 
         @abstractmethod
-        def addLap(self, lap, xValues, yValues, xLabel=None, yLabel=None, colour="white"):
+        def addLap(self, lap, lapData: pd.DataFrame, colour):
             """Adds a new lap to the plot. Implement this method for each new plot type to customise its behaviour"""
         
         @abstractmethod
@@ -381,29 +388,40 @@ class LapPlotItem(pg.PlotItem):
 
 
 class SimpleLapPlot(LapPlotItem):
-    """Displays a simple line graph"""
-    def __init__(self, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
-        super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+    """Displays a simple x/y line graph of 2 chosen fields from a lap"""
 
-    def addLap(self, lap, xValues, yValues, xLabel=None, yLabel=None, colour="white"):
+    def __init__(self, xAxis:str, yAxis:str, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+        super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+        self.xAxis: str = xAxis
+        self.yAxis: str = yAxis
+
+        self.setLabel(axis="left", text=yAxis.replace("_", " ").title())
+        self.setLabel(axis="bottom", text=xAxis.replace("_", " ").title())
+        self.setTitle(f"Simple {yAxis}/{xAxis} Plot")
+        self.showGrid(True, True, 0.5)
+
+    def addLap(self, lap, lapData: pd.DataFrame, colour):
             """
             Adds a new lap to the plot as a new line. Raises an exception if the lap has already been added.
             
             Parameters
             ----------
-
             lap : A tuple containing the filename, session_no, restart_no and lap_no of the lap being added
-            xValues : An array-like object containing the values used for the X axis
-            yValues : An array-like object containing the values used for the Y axis
-            xLabel : An optional string to label the X axis
-            yLabel : An optional string to label the Y axis
-            colour : An optional colour as a string to colour the line representing the lap. Default colour is white
+            lapData : A pandas DataFrame containing all the telemetry from the lap
+            colour : A (r, g, b) tuple representing a colour in rgb form
             """
 
             # If the lap has already been added to the plot, raise error
             assert lap not in self.lineDict.keys(), f"Cannot add lap {lap} to the plot: Already added."
 
-            pen = pg.mkPen(colour)
+            # Check if the fields exist in the lapData
+            assert self.xAxis in lapData.columns, "Couldn't add lap f{lap}, f{self.xAxis} Not found in data."
+            assert self.yAxis in lapData.columns, "Couldn't add lap f{lap}, f{self.yAxis} Not found in data."
+
+            xValues = lapData[self.xAxis]
+            yValues = lapData[self.yAxis]
+
+            pen = pg.mkPen(color=colour)
             line = self.plot(xValues, yValues, pen=pen)
             self.lineDict[lap] = line
 
@@ -421,34 +439,36 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
     _PlotTypes = Literal["delta", "simple"]
 
-    def __init__(self, parent=None, show=False, size=None, title=None, **kargs):
+    def __init__(self, sessionManager: SessionManager, parent=None, show=False, size=None, title=None, **kargs):
         super().__init__(parent, show, size, title, **kargs)
 
-        self.sessionManager: SessionManager | None = None
+        self.sessionManager: SessionManager = sessionManager
         self.plots = []
         self.laps = []  # A list of displayed laps, organised into tuples of (filename, sessionNo, restartNo, lapNo)
-    
-    def setSessionManager(self, sessionManager: SessionManager):
-        """Sets the session manager to get telemetry data from. Resets the plot widget."""
-        self.sessionManager = sessionManager
-        self.reset()
+
+        self.sessionManager.lapSelected.connect(self.addLap)
+        self.sessionManager.lapDeselected.connect(self.removeLap)
     
     def reset(self):
         """Resets the plots"""
         self.clear()  # Removes all items from the layout and resets current column and row to 0
         self.plots.clear()  # Remove all the plots from the plot list
     
-    def addLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int):
+    def addLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int, lapColour: tuple):
         """Adds the telemetry from a lap into all of the existing widgets, and tells the widget to include it in all
         future plots, unless it is removed"""
         lapData = self.sessionManager.getLapData(filename, sessionNo, restartNo, lapNo).reset_index()
+        for plot in self.plots:
+            plot.addLap((filename, sessionNo, restartNo, lapNo), lapData, lapColour)
 
     def removeLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int):
         """Removes the telemetry from a lap from all of the existing widgets, and tells the widget not to include it in
         any future widgets until it is added again"""
-        ...
+        lap = (filename, sessionNo, restartNo, lapNo)
+        for plot in self.plots:
+            plot.removeLap(lap)
 
-    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.params = None, yAxis: Utility.ForzaSettings.params = None):
+    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.plotAxisTypes = None, yAxis: Utility.ForzaSettings.plotAxisTypes = None):
         """
         Adds a new type of plot to the widget displaying all the currently selected laps. Plots can be chosen from a
         predefined list defined by the _PlotTypes literal. Some plots require x and y values to be provided, while others do not.
@@ -467,33 +487,12 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         newPlot: LapPlotItem | None = None
         
         match plotType:
-            case "simple":
-                # A simple line graph using the fields specified as the x and y axis
-                newPlot = SimpleLapPlot()
-                
+            case "simple":  # A simple line graph using the fields specified as the x and y axis
                 # Check that the telemetry data includes the fields that were asked for
                 assert yAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {yAxis} field not found in telemetry data."
                 assert xAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {xAxis} field not found in telemetry data."
-                
-                newPlot.setTitle(f"Simple {yAxis}/{xAxis} Plot")
-                newPlot.setLabel(axis="left", text=yAxis.capitalize())
-                newPlot.setLabel(axis="bottom", text=xAxis.capitalize())
-                newPlot.showGrid(True, True, 0.5)
-                
-                # Hardcoded for testing - get the details from the first packet in the telemetry data and use that lap only for now
-                filename = self.sessionManager.telemetry.getDataFrame()["filename"][0]
-                session_no = self.sessionManager.telemetry.getDataFrame()["session_no"][0]
-                restart_no = self.sessionManager.telemetry.getDataFrame()["restart_no"][0]
-                lap_no = self.sessionManager.telemetry.getDataFrame()["lap_no"][0]
-                lapData = self.sessionManager.getLapData(filename, session_no, restart_no, lap_no).reset_index()
 
-                #logging.info("Lap Data for Plot:\n{}".format(lapData))
-
-                xValues = lapData[xAxis]
-                yValues = lapData[yAxis]
-                #newPlot.plot(xValues, yValues)
-                newPlot.addLap((filename, session_no, restart_no, lap_no), xValues, yValues)
-
+                newPlot = SimpleLapPlot(xAxis, yAxis)
             case "delta":
                 ...
             case _:
@@ -517,28 +516,6 @@ class GroupDataItem(TreeDataItem):
 
     def __init__(self, text):
         super().__init__(text)
-
-
-class LapDataItem(TreeDataItem):
-    """A specific item class for laps in the tree view"""
-
-    # The colour choices available for the lap colour when selected
-    ColourChoices = Literal["red", "green", "blue", "cyan", "magenta", "yellow"]
-
-    def __init__(self, text):
-        super().__init__(text)
-        self.setSelectable(True)
-        
-    def assignColour(self, colour: ColourChoices):
-        """Adds an icon next to the Item with the selected colour"""
-        pm = QPixmap(16, 16)
-        pm.fill(QColor(colour))
-        icon = QIcon(pm)
-        self.setIcon(icon)
-    
-    def removeColour(self):
-        """Removes the coloured icon from the Item"""
-        self.setIcon(QIcon())
 
 
 class LapViewerDock(QtWidgets.QDockWidget):
@@ -599,8 +576,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # A more involved graph/plot view. Interactive so the user can add or remove different plots, and define what parts of
         # the data they look at
-        self.plots = MultiPlotWidget(show=True, title="Telemetry Plotting")
-        self.plots.setSessionManager(self.sessionManager)
+        self.plots = MultiPlotWidget(self.sessionManager, show=True, title="Telemetry Plotting")
         centralTabWidget.addTab(self.plots, QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Plots")
         
         # Add the Toolbar and Actions --------------------------

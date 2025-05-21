@@ -6,64 +6,6 @@ import socket
 from math import floor
 from typing import Literal
 
-class ColourPicker():
-    """A class to manage the use of the 6 primary colours through their Hue values"""
-
-    hueValueToWord = {0: "red", 60: "yellow", 120: "green", 180: "cyan", 240: "blue", 300: "magenta"}
-    hueWordToValue = {"red": 0, "yellow": 60, "green": 120, "cyan": 180, "blue": 240, "magenta": 300}
-
-    def __init__(self):
-        self.available = [] # List of hues that maintains order from lowest to highest hue
-        self._populate()
-
-    def _populate(self):
-        """Populates the available hues list"""
-        self.available = [0, 60, 120, 180, 240, 300]
-
-    def pick(self) -> str:
-        """Picks a new colour that isn't already being used. Will always pick the lowest available Hue. Raises IndexError if there
-        are no more colours to pick from."""
-        hue = self.available.pop(0)
-        return ColourPicker.hueValueToWord[hue]
-
-    def putBack(self, hue: int | str):
-        """Puts back a colour to be used again. Raises a ValueError if an invalid colour value (hue) is given (Eg. The value was not
-        a primary colour). Does nothing if the colour to be put back was already available to use."""
-
-        if isinstance(hue, int):
-            if hue > 300 or hue < 0 or hue % 60 != 0:
-                raise ValueError("Tried to put back invalid Hue: {}".format(hue))
-            
-            if hue in self.available:
-                return
-        else:
-            if hue not in ColourPicker.hueValueToWord.values():
-                raise ValueError("Tried to put back invalid Hue: {}".format(hue))
-            hue = ColourPicker.hueWordToValue[hue]
-
-        # Just use o(n) insert - there's only 6 elements
-        index = 0
-        while index < len(self.available):
-            if self.available[index] > hue:
-                self.available.insert(index, hue)
-                return
-            index += 1
-        self.available.append(hue)
-
-    def reset(self):
-        """Resets the colour picker"""
-        self._populate()
-
-
-class BlockColourIcon(QIcon):
-    """A QIcon containing a single block of colour"""
-
-    def __init__(self, colour: str):
-        self.colour = colour
-        pm = QPixmap(16, 16)
-        pm.fill(QColor(colour))
-        super().__init__(pm)
-
 
 def getIP():
     """Returns the local IP address as a string. If an error is encountered while trying to

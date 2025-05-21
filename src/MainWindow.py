@@ -502,22 +502,6 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         self.addItem(newPlot)
     
 
-class TreeDataItem(QStandardItem):
-    """A common item class for the tree view"""
-
-    def __init__(self, text):
-        super().__init__(text)
-        self.setEditable(False)  # Don't want the user to be able to edit cells
-        self.setSelectable(False)
-
-
-class GroupDataItem(TreeDataItem):
-    """An item class for all the groups that a lap is under in the tree view"""
-
-    def __init__(self, text):
-        super().__init__(text)
-
-
 class LapViewerDock(QtWidgets.QDockWidget):
 
     """A dock widget that displays an overview of the currently loaded laps"""

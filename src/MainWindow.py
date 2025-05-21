@@ -422,7 +422,8 @@ class SimpleLapPlot(LapPlotItem):
             yValues = lapData[self.yAxis]
 
             pen = pg.mkPen(color=colour)
-            line = self.plot(xValues, yValues, pen=pen)
+            name = f"{lap[0]}-{lap[1]}-{lap[2]}-{lap[3]}"
+            line = self.plot(xValues, yValues, pen=pen, name=name)
             self.lineDict[lap] = line
 
     def removeLap(self, lap):
@@ -493,6 +494,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 assert xAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {xAxis} field not found in telemetry data."
 
                 newPlot = SimpleLapPlot(xAxis, yAxis)
+                newPlot.addLegend()
             case "delta":
                 ...
             case _:
@@ -507,7 +509,7 @@ class LapViewerDock(QtWidgets.QDockWidget):
     """A dock widget that displays an overview of the currently loaded laps"""
     def __init__(self, sessionManager: SessionManager, parent=None):
         super().__init__("Lap View", parent=parent)
-        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
+        #self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
         self.setStatusTip("Lap Viewer: Choose which laps to view and analyse.")
 
         self.sessionManager: SessionManager = sessionManager

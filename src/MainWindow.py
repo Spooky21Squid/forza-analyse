@@ -110,6 +110,7 @@ class SessionManager(QObject):
         self.telemetry: DataFrameModel = DataFrameModel()  # The data containing all the currently loaded sessions, restarts and laps
         self.numberOfSessions: int = 0  # The number of sessions currently represented by the data
         self.trackOrdinal: int | None = None
+        self.initialised: bool = False  # True when the sessions have been loaded
         
         # A DataFrame containing important details about each lap from the telemetry data that the player completed. It contains:
         # Lap number, restart number, session number, filename, lap time, 
@@ -234,6 +235,7 @@ class SessionManager(QObject):
             # Update the lap details DataFrame
             self._updateLapDetails()
 
+            self.initialised = True
             self.updated.emit()  # Emit the updated signal after all the files have been uploaded and all data models have been updated
                     
     @staticmethod
@@ -370,6 +372,57 @@ class SessionManager(QObject):
         # This is needed to set an accurate lap time for the previous lap
 
 
+class AddPlotDialog(QtWidgets.QDialog):
+    """A custom dialog allowing different types of plots to be added to the plots widget"""
+
+
+    class SimplePlotForm(QtWidgets.QFrame):
+        """A form to add a simple plot"""
+
+        def __init__(self, parent = None):
+            super().__init__(parent)
+            layout = QtWidgets.QFormLayout()
+            self.setLayout(layout)
+
+            xAxisCombo = QtWidgets.QComboBox()
+            xAxisCombo.addItems(Utility.ForzaSettings.plotAxisTypes)
+            xAxisCombo.currentTextChanged.connect(self.setXAxis)
+            layout.addRow("X Axis", xAxisCombo)
+
+            yAxisCombo = QtWidgets.QComboBox()
+            yAxisCombo.addItems(Utility.ForzaSettings.plotAxisTypes)
+            yAxisCombo.currentTextChanged.connect(self.setYAxis)
+            layout.addRow("Y Axis", yAxisCombo)
+
+            self.xAxis = xAxisCombo.currentText()
+            self.yAxis = yAxisCombo.currentText()
+        
+        def setXAxis(self, value):
+            self.xAxis = value
+        
+        def setYAxis(self, value):
+            self.yAxis = value
+
+
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Plot")
+        
+        self.buttonBox = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Ok | QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+
+        self.tabs = QtWidgets.QTabWidget()
+        
+        simpleForm = AddPlotDialog.SimplePlotForm()
+        self.tabs.addTab(simpleForm, "Simple Plot")
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.tabs)
+        layout.addWidget(self.buttonBox)
+        self.setLayout(layout)
+
+
 class LapPlotItem(pg.PlotItem):
     def __init__(self, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
         super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
@@ -445,7 +498,8 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
         self.sessionManager: SessionManager = sessionManager
         self.plots = []
-        self.laps = []  # A list of displayed laps, organised into tuples of (filename, sessionNo, restartNo, lapNo)
+        self.laps = {}  # A dictionary of displayed laps : data, organised into tuples of (filename, sessionNo, restartNo, lapNo) : DataFrame
+        self.lapColours = {}  # A dictionary of displayed laps : colour
 
         self.sessionManager.lapSelected.connect(self.addLap)
         self.sessionManager.lapDeselected.connect(self.removeLap)
@@ -459,8 +513,11 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         """Adds the telemetry from a lap into all of the existing widgets, and tells the widget to include it in all
         future plots, unless it is removed"""
         lapData = self.sessionManager.getLapData(filename, sessionNo, restartNo, lapNo).reset_index()
+        lapTuple = (filename, sessionNo, restartNo, lapNo)
         for plot in self.plots:
-            plot.addLap((filename, sessionNo, restartNo, lapNo), lapData, lapColour)
+            plot.addLap(lapTuple, lapData, lapColour)
+        self.laps[lapTuple] = lapData
+        self.lapColours[lapTuple] = lapColour
 
     def removeLap(self, filename: str, sessionNo: int, restartNo: int, lapNo: int):
         """Removes the telemetry from a lap from all of the existing widgets, and tells the widget not to include it in
@@ -468,8 +525,10 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         lap = (filename, sessionNo, restartNo, lapNo)
         for plot in self.plots:
             plot.removeLap(lap)
+        self.laps.pop(lap)
+        self.lapColours.pop(lap)
 
-    def addNewPlot(self, plotType: _PlotTypes, xAxis: Utility.ForzaSettings.plotAxisTypes = None, yAxis: Utility.ForzaSettings.plotAxisTypes = None):
+    def addNewPlot(self, plotType: _PlotTypes, xAxis: str = None, yAxis: str = None):
         """
         Adds a new type of plot to the widget displaying all the currently selected laps. Plots can be chosen from a
         predefined list defined by the _PlotTypes literal. Some plots require x and y values to be provided, while others do not.
@@ -500,9 +559,33 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
             case _:
                 ...
         
+        # Add all selected laps to the plot
+        for lap, data in self.laps.items():
+            colour = self.lapColours[lap]
+            newPlot.addLap(lap, data, colour)
+
         self.plots.append(newPlot)
         self.addItem(newPlot)
     
+    def addNewPlotAction(self):
+        logging.info("Add new plot action")
+        if not self.sessionManager.initialised:
+            QtWidgets.QMessageBox.information(self, "No Session Loaded", "Cannot add new plot: Session has not been loaded")
+            return
+        dlg = AddPlotDialog()
+        if dlg.exec():
+            match dlg.tabs.currentIndex():
+                case 0:  # Simple Plot
+                    self.addNewPlot("simple", dlg.tabs.currentWidget().xAxis, dlg.tabs.currentWidget().yAxis)
+
+                case 1:  # Delta
+                    ...
+                case _:
+                    ...
+
+        else:
+            logging.info("Didn't add plot")
+        
 
 class LapViewerDock(QtWidgets.QDockWidget):
 
@@ -581,6 +664,11 @@ class MainWindow(QtWidgets.QMainWindow):
         openNewSessionsAction.triggered.connect(self.sessionManager.openNewSessions)
         toolbar.addAction(openNewSessionsAction)
 
+        addNewPlotAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/chart.png"))), "Add New Plot", self)
+        addNewPlotAction.setStatusTip("Add New Plot: Creates and adds a new plot to the plot window.")
+        addNewPlotAction.triggered.connect(self.plots.addNewPlotAction)
+        toolbar.addAction(addNewPlotAction)
+
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()
 
@@ -606,4 +694,6 @@ class MainWindow(QtWidgets.QMainWindow):
         #    self.sessionManager.telemetry.loc[(self.sessionManager.telemetry["lap_no"] == 1) & (self.sessionManager.telemetry["dist_traveled"] < 1950)])
         #    )
 
-        self.plots.addNewPlot("simple", "cur_lap_distance", "speed")
+        #self.plots.addNewPlot("simple", "cur_lap_distance", "speed")
+        #self.plots.addNewPlot("simple", "cur_lap_distance", "accel")
+        #self.plots.addNewPlot("simple", "cur_lap_distance", "brake")

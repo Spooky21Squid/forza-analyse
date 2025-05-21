@@ -28,7 +28,7 @@ class ForzaSettings():
 
     # The name of each field that a plot can draw values from. Made from the regular Forza data out parameters
     # and a few custom convenience fields added on
-    plotAxisTypes = Literal[
+    plotAxisTypes = [
         'cur_lap_distance', 'session_no', 'lap_no', 'restart_no', 'filename'  # All custom field names
         'is_race_on', 'timestamp_ms',
         'engine_max_rpm', 'engine_idle_rpm', 'current_engine_rpm',

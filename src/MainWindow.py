@@ -424,27 +424,38 @@ class AddPlotDialog(QtWidgets.QDialog):
 
 
 class LapPlotItem(pg.PlotItem):
-    def __init__(self, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+
+    wantToClose = pyqtSignal(int)  # Emitted when the close action has been triggered
+
+    def __init__(self, id:int, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
         super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
 
         # A dictionary of tuples : PlotDataItem. Each key is a unique tuple and identifies the PlotDataItem value (or line) that
         # it is associated with
         self.lineDict = {}
-
-        @abstractmethod
-        def addLap(self, lap, lapData: pd.DataFrame, colour):
-            """Adds a new lap to the plot. Implement this method for each new plot type to customise its behaviour"""
+        self.id = id  # The id of the plot, passed to the close signal
+        vb = self.getViewBox()
+        closeAction = vb.menu.addAction("Close")
+        closeAction.triggered.connect(self.closing)
         
-        @abstractmethod
-        def removeLap(self, lap):
-            """Removes a lap from the plot given a tuple identifying it. Implement this method for each new plot type to customise its behaviour"""
+    def closing(self):
+        logging.info("Closing...")
+        self.wantToClose.emit(self.id)
+
+    @abstractmethod
+    def addLap(self, lap, lapData: pd.DataFrame, colour):
+        """Adds a new lap to the plot. Implement this method for each new plot type to customise its behaviour"""
+    
+    @abstractmethod
+    def removeLap(self, lap):
+        """Removes a lap from the plot given a tuple identifying it. Implement this method for each new plot type to customise its behaviour"""
 
 
 class SimpleLapPlot(LapPlotItem):
     """Displays a simple x/y line graph of 2 chosen fields from a lap"""
 
-    def __init__(self, xAxis:str, yAxis:str, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
-        super().__init__(parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+    def __init__(self, id:int, xAxis:str, yAxis:str, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+        super().__init__(id, parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
         self.xAxis: str = xAxis
         self.yAxis: str = yAxis
 
@@ -496,8 +507,9 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
     def __init__(self, sessionManager: SessionManager, parent=None, show=False, size=None, title=None, **kargs):
         super().__init__(parent, show, size, title, **kargs)
 
+        self.nextid = 0  # The next ID to give to a plot
         self.sessionManager: SessionManager = sessionManager
-        self.plots = []
+        self.plots = {}  # A dict of id (int) : plot (plotitem)
         self.laps = {}  # A dictionary of displayed laps : data, organised into tuples of (filename, sessionNo, restartNo, lapNo) : DataFrame
         self.lapColours = {}  # A dictionary of displayed laps : colour
 
@@ -514,7 +526,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         future plots, unless it is removed"""
         lapData = self.sessionManager.getLapData(filename, sessionNo, restartNo, lapNo).reset_index()
         lapTuple = (filename, sessionNo, restartNo, lapNo)
-        for plot in self.plots:
+        for plot in self.plots.values():
             plot.addLap(lapTuple, lapData, lapColour)
         self.laps[lapTuple] = lapData
         self.lapColours[lapTuple] = lapColour
@@ -523,10 +535,15 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         """Removes the telemetry from a lap from all of the existing widgets, and tells the widget not to include it in
         any future widgets until it is added again"""
         lap = (filename, sessionNo, restartNo, lapNo)
-        for plot in self.plots:
+        for plot in self.plots.values():
             plot.removeLap(lap)
         self.laps.pop(lap)
         self.lapColours.pop(lap)
+
+    def removePlot(self, plotId: int):
+        """Closes and removes a plot from the layout when given its ID"""
+        plot = self.plots.pop(plotId)
+        self.removeItem(plot)
 
     def addNewPlot(self, plotType: _PlotTypes, xAxis: str = None, yAxis: str = None):
         """
@@ -545,6 +562,8 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         assert self.sessionManager is not None, "Error: Cannot add a plot before telemetry data has been loaded"
 
         newPlot: LapPlotItem | None = None
+        plotId = self.nextid
+        self.nextid += 1
         
         match plotType:
             case "simple":  # A simple line graph using the fields specified as the x and y axis
@@ -552,7 +571,7 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                 assert yAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {yAxis} field not found in telemetry data."
                 assert xAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {xAxis} field not found in telemetry data."
 
-                newPlot = SimpleLapPlot(xAxis, yAxis)
+                newPlot = SimpleLapPlot(plotId, xAxis, yAxis)
                 newPlot.addLegend()
             case "delta":
                 ...
@@ -563,8 +582,11 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
         for lap, data in self.laps.items():
             colour = self.lapColours[lap]
             newPlot.addLap(lap, data, colour)
+        
+        # Connect the close action
+        newPlot.wantToClose.connect(self.removePlot)
 
-        self.plots.append(newPlot)
+        self.plots[plotId] = newPlot
         self.addItem(newPlot)
     
     def addNewPlotAction(self):

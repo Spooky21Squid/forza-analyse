@@ -404,6 +404,34 @@ class AddPlotDialog(QtWidgets.QDialog):
             self.yAxis = value
 
 
+    class DeltaPlotForm(QtWidgets.QFrame):
+        """A form to add a delta plot"""
+
+        def __init__(self, parent = None):
+            super().__init__(parent)
+            layout = QtWidgets.QFormLayout()
+            self.setLayout(layout)
+
+            xAxisCombo = QtWidgets.QComboBox()
+            xAxisCombo.addItems(Utility.ForzaSettings.plotAxisTypes)
+            xAxisCombo.currentTextChanged.connect(self.setXAxis)
+            layout.addRow("X Axis", xAxisCombo)
+
+            yAxisCombo = QtWidgets.QComboBox()
+            yAxisCombo.addItems(Utility.ForzaSettings.plotAxisTypes)
+            yAxisCombo.currentTextChanged.connect(self.setYAxis)
+            layout.addRow("Y Axis", yAxisCombo)
+
+            self.xAxis = xAxisCombo.currentText()
+            self.yAxis = yAxisCombo.currentText()
+        
+        def setXAxis(self, value):
+            self.xAxis = value
+        
+        def setYAxis(self, value):
+            self.yAxis = value
+
+
     def __init__(self, parent = None):
         super().__init__(parent)
         self.setWindowTitle("Add New Plot")
@@ -416,6 +444,9 @@ class AddPlotDialog(QtWidgets.QDialog):
         
         simpleForm = AddPlotDialog.SimplePlotForm()
         self.tabs.addTab(simpleForm, "Simple Plot")
+
+        deltaForm = AddPlotDialog.DeltaPlotForm()
+        self.tabs.addTab(deltaForm, "Delta Plot")
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(self.tabs)
@@ -499,6 +530,81 @@ class SimpleLapPlot(LapPlotItem):
         self.removeItem(line)
 
 
+class DeltaPlot(LapPlotItem): 
+    """Displays a delta plot for a chosen field for all selected laps. """
+
+    def __init__(self, id:int, xAxis:str, yAxis:str, parent=None, name=None, labels=None, title=None, viewBox=None, axisItems=None, enableMenu=True, **kargs):
+        super().__init__(id, parent, name, labels, title, viewBox, axisItems, enableMenu, **kargs)
+        self.xAxis: str = xAxis
+        self.yAxis: str = yAxis
+
+        self.setLabel(axis="left", text=yAxis.replace("_", " ").title())
+        self.setLabel(axis="bottom", text=xAxis.replace("_", " ").title())
+        self.setTitle(f"Delta plot for {yAxis}")
+        self.showGrid(True, True, 0.5)
+
+        # The baseline lap values to compare all the other laps to
+        self.baselineSeries: pd.Series | None = None  # The series to use as the baseline
+        self.baseLap: tuple | None = None  # The lap that is used as the baseline, as a tuple
+
+    def addLap(self, lap, lapData: pd.DataFrame, colour):
+            """
+            Adds a new lap to the plot as a new line. Raises an exception if the lap has already been added.
+            
+            Parameters
+            ----------
+            lap : A tuple containing the filename, session_no, restart_no and lap_no of the lap being added
+            lapData : A pandas DataFrame containing all the telemetry from the lap
+            colour : A (r, g, b) tuple representing a colour in rgb form
+            """
+            
+            # Don't bother adding if it's the base lap
+            if lap == self.baseLap:
+                return
+            
+            # If the lap has already been added to the plot, raise error
+            assert lap not in self.lineDict.keys(), f"Cannot add lap {lap} to the plot: Already added."
+
+            # Check if the fields exist in the lapData
+            assert self.xAxis in lapData.columns, "Couldn't add lap f{lap}, f{self.xAxis} Not found in data."
+            assert self.yAxis in lapData.columns, "Couldn't add lap f{lap}, f{self.yAxis} Not found in data."
+
+            xValues = lapData[self.xAxis]
+            yValues = lapData[self.yAxis]
+
+            # Create a new series of Y Values indexed by the X Values to use for comparison to other laps
+            newLapSeries = pd.Series(yValues.values, index=xValues.copy())
+
+            # If the lap is the first lap to be added, make it the base line.
+            # This base line can never be changed once it is added to the plot.
+            if self.baselineSeries is None:
+                self.baselineSeries = newLapSeries.copy()
+                self.baseLap = lap
+            
+            # Get the difference between the new lap, and the baseline
+            dNew, dBase = self.baselineSeries.align(newLapSeries)
+            difference = dBase.interpolate() - dNew.interpolate()
+            #difference.interpolate(inplace=True)
+
+            # Create the plot data item using the index as the x axis, and values as the y axis
+            pen = pg.mkPen(color=colour)
+            name = f"{lap[0]}-{lap[1]}-{lap[2]}-{lap[3]}"
+            line = self.plot(difference.index.to_list(), difference.values, pen=pen, name=name)
+            self.lineDict[lap] = line
+
+    def removeLap(self, lap):
+        """Removes a lap from the plot given a tuple identifying it. Raises an exception if the lap is not in the plot"""
+
+        # Don't remove if it's the base lap
+        if lap == self.baseLap:
+            return
+
+        assert lap in self.lineDict.keys(), "Cannot remove lap {lap} from the plot: doesn't exist."
+
+        line = self.lineDict.pop(lap)
+        self.removeItem(line)
+
+
 class MultiPlotWidget(pg.GraphicsLayoutWidget):
     """Displays multiple plots generated from the session data."""
 
@@ -573,8 +679,15 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
 
                 newPlot = SimpleLapPlot(plotId, xAxis, yAxis)
                 newPlot.addLegend()
+
             case "delta":
-                ...
+                # Check that the telemetry data includes the fields that were asked for
+                assert yAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {yAxis} field not found in telemetry data."
+                assert xAxis in self.sessionManager.telemetry.getDataFrame().columns, f"Error: {xAxis} field not found in telemetry data."
+
+                newPlot = DeltaPlot(plotId, xAxis, yAxis)
+                newPlot.addLegend()
+                
             case _:
                 ...
         
@@ -601,7 +714,8 @@ class MultiPlotWidget(pg.GraphicsLayoutWidget):
                     self.addNewPlot("simple", dlg.tabs.currentWidget().xAxis, dlg.tabs.currentWidget().yAxis)
 
                 case 1:  # Delta
-                    ...
+                    self.addNewPlot("delta", dlg.tabs.currentWidget().xAxis, dlg.tabs.currentWidget().yAxis)
+
                 case _:
                     ...
 

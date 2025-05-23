@@ -118,7 +118,8 @@ class SessionManager(QObject):
         self.lapColours = {}  # A dictionary of laps : colour. Keys (laps) are tuples containing (filename, session_no, restart_no, lap_no)
     
     def _updateLapDetails(self):
-        """Creates a new DataFrame with important details about each completed lap"""
+        """Creates a new DataFrame with important details about each completed lap. This filters the data in each session
+        to look for completed laps only."""
 
         lapDistance = self.trackDetails.at[self.trackOrdinal, "length"]
         
@@ -225,7 +226,8 @@ class SessionManager(QObject):
                     tempNumberOfSessions += data["session_no"].max() + 1
             
             # All sessions were loaded successfull, now replace the currently loaded sessions with new ones
-            self.telemetry.updateData(tempSessionData.reset_index())
+            tempSessionData.reset_index(drop=True, inplace=True)
+            self.telemetry.updateData(tempSessionData)
             self.trackOrdinal = tempTrackOrdinal
             self.numberOfSessions = tempNumberOfSessions
 

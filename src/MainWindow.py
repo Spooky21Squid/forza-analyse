@@ -26,6 +26,61 @@ from abc import ABC, abstractmethod
 from typing import Literal
 
 
+class DetailsWidget(QtWidgets.QFrame):
+    """A widget that displays a dictionary of values as a simple set of labels"""
+
+    class LabelPair(QtWidgets.QFrame):
+        """A pair of labels organised horizontally next to each other"""
+
+        def __init__(self, parent = None, left: str = "", right: str = ""):
+            super().__init__(parent)
+            
+            layout = QtWidgets.QHBoxLayout()
+            self.setLayout(layout)
+
+            self.left = QtWidgets.QLabel()
+            self.right = QtWidgets.QLabel()
+
+            self.setLabels(left, right)
+
+            layout.addWidget(self.left)
+            layout.addWidget(self.right)
+        
+        def setLabels(self, left: str = "", right: str = ""):
+            """Assigns strings to the labels"""
+            self.left.setText(left)
+            self.right.setText(right)
+            
+
+    def __init__(self, parent = None, data: dict = None):
+        super().__init__(parent)
+        
+        # List of the pairs of labels the widget will display, indexed in the order they were added
+        self.pairs = []
+        self.lt = QtWidgets.QVBoxLayout()
+        self.setLayout(self.lt)
+
+    def addPairs(self, dict: dict):
+        """Adds the keys and values from the dict to the widget as pairs of labels"""
+        
+        for key, val in dict.items():
+            self.addPair(key, val)
+    
+    def addPair(self, left: str = "", right: str = ""):
+        """Adds a pair of values to the widget"""
+
+        pair = DetailsWidget.LabelPair(left=left, right=right)
+        self.pairs.append(pair)
+        self.lt.addWidget(pair)
+    
+    def delPair(self, index: int):
+        """Deletes a pair of values from the widget when given it's integer index. Raises IndexError if the index supplied
+        is out of bounds"""
+
+        pair = self.pairs[index]
+        self.lt.removeWidget(pair)
+
+
 class DataFrameModel(QAbstractTableModel):
     """A Table Model representing a pandas DataFrame"""
 
@@ -748,7 +803,15 @@ class LapViewerDock(QtWidgets.QDockWidget):
 
         self.dataModel = self.sessionManager.lapDetails
         self.dataView.setModel(self.dataModel)
-        self.setWidget(self.dataView)
+
+        self.details = DetailsWidget()
+
+        # Create a vertical splitter
+        self.splitter = QtWidgets.QSplitter(Qt.Orientation.Vertical)
+        self.splitter.addWidget(self.dataView)
+        self.splitter.addWidget(self.details)
+
+        self.setWidget(self.splitter)
 
         self.dataView.clicked.connect(self.doSomething)
         self.dataView.selectionModel().selectionChanged.connect(self.sessionManager.updateLapSelection)

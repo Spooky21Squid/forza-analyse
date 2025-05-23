@@ -84,7 +84,7 @@ class LapDetailsModel(DataFrameModel):
         
         if role == Qt.ItemDataRole.DisplayRole:
             value = self.frame.iat[index.row(), index.column()]
-            if index.column() == 4:
+            if index.column() == 5:
                 value = Utility.formatLapTime(value)
             return str(value)
         
@@ -130,10 +130,15 @@ class SessionManager(QObject):
             distanceManaged = x["cur_lap_distance"].iat[-1]
             return True if distanceManaged > lapDistance - tolerance and distanceManaged < lapDistance + tolerance else False
 
-        # Remove the incomplete laps from the telemetry data
-        summary = self.telemetry.getDataFrame().groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
-        summary = summary.groupby(["filename", "session_no", "restart_no", "lap_no"])["cur_lap_time"].last()
-        self.lapDetails.updateData(summary.reset_index().rename(columns={'cur_lap_time': 'lap_time'}))
+        # Filter the packets from incomplete laps out of the data
+        filteredLaps = self.telemetry.getDataFrame().groupby(["filename", "session_no", "restart_no", "lap_no"]).filter(lambda x : filterFunc(x, lapDistance))
+        
+        groupedLaps = filteredLaps.groupby(["filename", "session_no", "restart_no", "lap_no"])[["car_ordinal", "cur_lap_time"]].last()
+
+        # Expand the series into a dataframe with the multi index turning into columns
+        lapDetails = groupedLaps.rename(columns={'cur_lap_time': 'lap_time'})
+        
+        self.lapDetails.updateData(lapDetails.reset_index().rename(columns={'cur_lap_time': 'lap_time'}))
 
     def updateLapSelection(self, selected: QItemSelection, deselected: QItemSelection):
         """Update the current lap selection"""

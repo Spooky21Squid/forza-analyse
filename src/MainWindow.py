@@ -79,6 +79,12 @@ class DetailsWidget(QtWidgets.QFrame):
 
         pair = self.pairs[index]
         self.lt.removeWidget(pair)
+    
+    def clear(self):
+        """Clears all the pairs from the widget"""
+        for pair in self.pairs:
+            self.lt.removeWidget(pair)
+        self.pairs.clear()
 
 
 class DataFrameModel(QAbstractTableModel):

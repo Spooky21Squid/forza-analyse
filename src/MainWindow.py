@@ -770,7 +770,7 @@ class MainWindow(QtWidgets.QMainWindow):
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
         # A DataFrame containing all the track details
-        trackDetailsPath = parentDir / pathlib.Path("track-details.csv")
+        trackDetailsPath = parentDir / pathlib.Path("config/track-details.csv")
         self.forzaTrackDetails = pd.read_csv(str(trackDetailsPath), index_col="ordinal")
 
         # Stores the data for all currently loaded sessions in a DataFrame

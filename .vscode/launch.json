@@ -5,10 +5,31 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Video Record",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+
+            ]
+        },
+        {
+            "name": "Manteo Format",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/formatCarDetails.py",
+            "console": "integratedTerminal",
+            "args": [
+                "${workspaceFolder}/assets/other/ManteoMax's FORZA MOTORSPORT Spreadsheets - Cars.csv",
+                "${workspaceFolder}/assets/other/car-details.csv"
+            ]
+        },
+        {
             "name": "Python Debugger: Run Forza Analyse",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/src/forza-analyse.py",
+            "program": "${workspaceFolder}/src/main.py",
             "console": "integratedTerminal"
         },
         {

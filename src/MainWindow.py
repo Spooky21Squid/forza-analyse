@@ -55,7 +55,7 @@ class DetailsWidget(QtWidgets.QFrame):
     def __init__(self, parent = None, data: dict = None):
         super().__init__(parent)
         
-        # List of the pairs of labels the widget will display, indexed in the order they were added
+        # List of the pairs of labels the widget will display, indexed in the order they were added.
         self.pairs = []
         self.lt = QtWidgets.QVBoxLayout()
         self.setLayout(self.lt)

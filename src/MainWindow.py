@@ -13,6 +13,7 @@ import distinctipy
 from fdp import ForzaDataPacket
 import Utility
 from models import DataFrameModel, LapDetailsModel
+from CaptureRaceVideo import CaptureManager
 
 from time import sleep
 import pathlib
@@ -777,6 +778,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sessionManager = SessionManager(self.forzaTrackDetails, self)
         self.sessionManager.updated.connect(self.update)
 
+        # Manages capturing telemetry and race footage
+        self.captureManager = CaptureManager()
+
         # Central widget is a Tab Widget, user can select from a number of different ways to view the telemetry data
         centralTabWidget = QtWidgets.QTabWidget()
         self.setCentralWidget(centralTabWidget)
@@ -811,6 +815,17 @@ class MainWindow(QtWidgets.QMainWindow):
         addNewPlotAction.setStatusTip("Add New Plot: Creates and adds a new plot to the plot window.")
         addNewPlotAction.triggered.connect(self.plots.addNewPlotAction)
         toolbar.addAction(addNewPlotAction)
+
+        configureCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Configure Capture Settings", self)
+        configureCaptureAction.setStatusTip("Configure Capture Settings: Change the settings used for capturing race footage and telemetry.")
+        configureCaptureAction.triggered.connect(self.captureManager.openConfigureDialog)
+        toolbar.addAction(configureCaptureAction)
+
+        toggleCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Start/Stop Capture", self)
+        toggleCaptureAction.setStatusTip("Start/Stop Capture: Start/Stop capturing race footage and telemetry data.")
+        toggleCaptureAction.setCheckable(True)
+        toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
+        toolbar.addAction(toggleCaptureAction)
 
         # Add the menu bar and connect actions ----------------------------
         menu = self.menuBar()

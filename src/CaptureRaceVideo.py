@@ -205,7 +205,7 @@ class TelemetryCapture(QObject):
             
     def __init__(self, parent = None, port = None):
         super().__init__(parent)
-        self._signals = TelemetryCapture.Signals()
+        self.signals = TelemetryCapture.Signals()
         self._active = False  # Whether telemetry is currently being recorded
         self._port: int = port  # The port that listens for incoming Forza data packets
         self._packetsCollected = 0
@@ -219,7 +219,7 @@ class TelemetryCapture(QObject):
         """Start recording telemetry"""
         
         if self._port is None:
-            self._signals.errorOccurred.emit(TelemetryCaptureError.CaptureFailed)
+            self.signals.errorOccurred.emit(TelemetryCaptureError.CaptureFailed)
             return
 
         self._packetsCollected = 0
@@ -241,7 +241,7 @@ class TelemetryCapture(QObject):
             self._endTime = datetime.datetime.now()
 
         self._active = active
-        self._signals.activeChanged.emit(active)
+        self.signals.activeChanged.emit(active)
         
     def _onCollected(self, data: bytes):
         """Called when a single UDP packet is collected. Receives the unprocessed
@@ -252,10 +252,10 @@ class TelemetryCapture(QObject):
         try:
             fdp = ForzaDataPacket(data)
             self._packetsCollected += 1
-            self._signals.collected.emit(fdp)
+            self.signals.collected.emit(fdp)
         except:
             # If it's not a forza packet
-            self._signals.errorOccurred.emit(TelemetryCaptureError.BadPacketReceived)
+            self.signals.errorOccurred.emit(TelemetryCaptureError.BadPacketReceived)
             self._invalidPacketsCollected += 1
 
         if self._packetsCollected % 60 == 0:
@@ -269,17 +269,18 @@ class TelemetryCapture(QObject):
 
     def stop(self):
         """Stops recording telemetry"""
-        self._worker.finish()
+        if self._worker is not None:
+            self._worker.finish()
     
     def setPort(self, port: int):
         """Sets the port to listen to. If the object is currently capturing telemetry, the port will not change and an error will occur."""
         if self._active:
-            self._signals.errorOccurred.emit(TelemetryCaptureError.PortChangeError)
+            self.signals.errorOccurred.emit(TelemetryCaptureError.PortChangeError)
         else:
             self._port = port
     
-    def getPort(self) -> int:
-        """Returns the current port"""
+    def getPort(self) -> int | None:
+        """Returns the current port. Returns None if the port hasn't been set yet."""
         return self._port
     
     def isActive(self) -> bool:
@@ -301,6 +302,14 @@ class TelemetryCapture(QObject):
     def getEndTime(self) -> datetime.datetime | None:
         """Returns the end time of the last capture as a datetime object. Returns None if no capture session has ended."""
         return self._endTime
+
+    def ready(self) -> bool:
+        """Returns True if the object is configured and ready to start recording. Returns False if it is not ready, or
+        is already capturing."""
+        if self._port is not None and not self._active:
+            return True
+        else:
+            return False
 
 
 class FootageCaptureSettingsWidget(QtWidgets.QWidget):
@@ -493,19 +502,6 @@ class TelemetryCaptureSettingsWidget(QtWidgets.QWidget):
     def __init__(self, parent = None):
         super().__init__(parent)
 
-        self._telemetryCapture = TelemetryCapture()
-        self._port = 1337
-        self._packetsCollected = 0
-        self._invalidPacketsCollected = 0
-        self._threadpool = QThreadPool(self)
-        self._timer = QTimer(self)
-        self._timer.setInterval(7000)  # 7 Second timer
-        self._timer.timeout.connect(self.stopTest)
-
-        self.worker = UDPWorker(self._port)
-        self.worker.signals.collected.connect(self.onCollected)
-        self.worker.signals.finished.connect(self.onTestStopped)
-
         self._ipLabel = QtWidgets.QLabel("IP Address: " + TelemetryCaptureSettingsWidget.getIP(), self)
         self._testDisplay = QtWidgets.QPlainTextEdit("Waiting for packets...", self)
         self._testDisplay.setReadOnly(True)
@@ -516,8 +512,18 @@ class TelemetryCaptureSettingsWidget(QtWidgets.QWidget):
 
         self._portSpinBox = QtWidgets.QSpinBox(self)
         self._portSpinBox.setRange(1025, 65535)
-        self._portSpinBox.setValue(self._port)
-        self._portSpinBox.valueChanged.connect(self.onPortValueChanged)
+        self._portSpinBox.setValue(1337)  # Hard code a default for now, but use value from a config file later
+
+        self._telemetryCapture = TelemetryCapture()
+        self._telemetryCapture.setPort(self._portSpinBox.value())
+        self._telemetryCapture.signals.activeChanged.connect(self.onActiveChanged)
+        self._telemetryCapture.signals.collected.connect(self.onCollected)
+        self._portSpinBox.valueChanged.connect(self._telemetryCapture.setPort)
+
+        # 7 second timer for the connection test
+        self._timer = QTimer(self)
+        self._timer.setInterval(7000)
+        self._timer.timeout.connect(self._telemetryCapture.stop)
 
         self._formLayout = QtWidgets.QFormLayout()
         self._formLayout.addRow("Port", self._portSpinBox)
@@ -546,65 +552,73 @@ class TelemetryCaptureSettingsWidget(QtWidgets.QWidget):
         self._testDisplay.insertPlainText("Running connection test...\n")
         self._testDisplay.insertPlainText("Make sure there is an active Forza race happening in order to receive data.\n\n")
 
-        self.worker = UDPWorker(self._port)
-        self.worker.signals.collected.connect(self.onCollected)
-        self.worker.signals.finished.connect(self.onTestStopped)
-
-        self._threadpool.start(self.worker)
+        self._telemetryCapture.start()
         self._timer.start()
-        logging.debug("Thread started")
+        logging.debug("Test started")
     
     def stopTest(self):
         """Stops the thread listening for Forza packets"""
-        self.worker.finish()
+        self._telemetryCapture.stop()
         self._timer.stop()
 
-    def onCollected(self, data):
-        """Called when a single UDP packet is collected. Receives the unprocessed
-        packet data, transforms it into a Forza Data Packet and emits the update signal with
-        that forza data packet object, and the dashboard config dictionary. If the race
-        is not on, it does not emit the signal"""
+    def onCollected(self, fdp: ForzaDataPacket):
+        """Called when a single valid Forza Data Packet is collected"""
 
-        logging.debug("onCollected: Received Data")
+        logging.debug("onCollected: Received FDP")
 
-        fdp: ForzaDataPacket = None
-        try:
-            fdp = ForzaDataPacket(data)
-            self._packetsCollected += 1
-        except:
-            # If it's not a forza packet
-            self.on_packet_type_error_occured()
-            self._invalidPacketsCollected += 1
+        packets = self._telemetryCapture.getPacketsCollected()
+        if packets % 60 == 0:
+            self._testDisplay.insertPlainText(f"Collected {packets} packets\n")
 
-        if self._packetsCollected % 60 == 0:
-            self._testDisplay.insertPlainText(f"Collected {self._packetsCollected} packets\n")
+    def onActiveChanged(self, active: bool):
+        """Called when the telemetry capture object changes its active status"""
+        if active:
+            self._testDisplay.insertPlainText("Telemetry capture active.\n")
+            startTime = self._telemetryCapture.getStartTime()
+            self._testDisplay.insertPlainText(f"Test started at {startTime}.\n")
+        else:
+            self.onTestStopped()
+            endTime = self._telemetryCapture.getEndTime()
+            self._testDisplay.insertPlainText(f"Test finished at {endTime}.\n")
 
     def onTestStopped(self):
         """Called after the port is closed and the dashboard stops listening to packets"""
         logging.debug("Finished listening")
         self._testDisplay.insertPlainText("Finished test - ")
 
-        if self._packetsCollected == 0 and self._invalidPacketsCollected == 0:
+        valid = self._telemetryCapture.getPacketsCollected()
+        invalid = self._telemetryCapture.getInvalidPacketsCollected()
+
+        if valid == 0 and invalid == 0:
             self._testDisplay.insertPlainText("No packets detected. Try another port.\n")
-        elif self._packetsCollected == 0 and self._invalidPacketsCollected > 0:
+        elif valid == 0 and invalid > 0:
             self._testDisplay.insertPlainText("Connection was established but packets couldn't be processed. Make sure the Packet Format is set to 'Dash'.\n")
-        elif self._packetsCollected > 0 and self._invalidPacketsCollected == 0:
-            if self._packetsCollected > 350:
+        elif valid > 0 and invalid == 0:
+            if valid > 350:
                 self._testDisplay.insertPlainText("Good connection.\n")
             else:
                 self._testDisplay.insertPlainText("Connection established but is poor.\n")
         else:
             self._testDisplay.insertPlainText("Connection was established but some packets couldn't be processed. Try another port.\n")
-        
-        self._packetsCollected = 0
-        self._invalidPacketsCollected = 0
 
         self._portSpinBox.setEnabled(True)
         self._testConnectionButton.setEnabled(True)
 
-    def on_packet_type_error_occured(self):
-        self.set_error_string("Packet Type Error: Connection was established, but non-Forza packets were detected")
-    
+    def onCaptureError(self, error: TelemetryCaptureError):
+        match error:
+            case TelemetryCaptureError.PortChangeError:
+                self.set_error_string(error.value)
+                self._portSpinBox.setValue(self._telemetryCapture.getPort())
+
+            case TelemetryCaptureError.CaptureFailed:
+                self.set_error_string(error.value)
+
+            case TelemetryCaptureError.BadPacketReceived:
+                self.set_error_string(error.value)
+
+            case _:
+                ...
+
     def set_error_string(self, t):
         self._status_label.setStyleSheet("background-color: rgb(255, 0, 0);")
         self._status_label.setText(t)
@@ -612,9 +626,6 @@ class TelemetryCaptureSettingsWidget(QtWidgets.QWidget):
     def clear_error_string(self):
         self._status_label.clear()
         self._status_label.setStyleSheet("")
-
-    def onPortValueChanged(self, value):
-        self._port = value
 
     def getIP():
         """Returns the local IP address as a string. If an error is encountered while trying to
@@ -720,7 +731,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent = None):
         super().__init__(parent)
 
-        parentDir = pathlib.Path(__file__).parent.parent.parent.resolve()
+        parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
         self.captureManager = CaptureManager()
 

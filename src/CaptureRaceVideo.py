@@ -327,6 +327,13 @@ class FootageCaptureSettingsWidget(QtWidgets.QWidget):
         self._start_stop_button = QtWidgets.QPushButton("Select an input device", self)
         self._status_label = QtWidgets.QLabel(self)
 
+        # Whether to capture footage or just telemetry
+        formLayout = QtWidgets.QFormLayout()
+        self._capture_footage = QtWidgets.QCheckBox()
+        self._capture_footage.setChecked(True)
+        self._capture_footage.checkStateChanged.connect(self.on_camera_footage_checked)
+        formLayout.addRow("Record footage?", self._capture_footage)
+
         # Starts a preview of the capture session
         self._video_widget = QVideoWidget(self)
         self._media_capture_session.setVideoOutput(self._video_widget)
@@ -337,7 +344,7 @@ class FootageCaptureSettingsWidget(QtWidgets.QWidget):
         self._window_list_view.setModel(self._window_list_model)
 
         self._window_capture = QWindowCapture(self)
-        self._window_capture.start()
+        #self._window_capture.start()
         self._media_capture_session.setWindowCapture(self._window_capture)
 
         # Adds a context menu to the window list view with an action to refresh the capturable windows
@@ -368,19 +375,22 @@ class FootageCaptureSettingsWidget(QtWidgets.QWidget):
 
         # Layout the dialog with the camera list, window list, and footage preview
         grid_layout = QtWidgets.QGridLayout(self)
-        grid_layout.addWidget(self._window_label, 0, 0)
-        grid_layout.addWidget(self._window_list_view, 1, 0)
+        
+        grid_layout.addLayout(formLayout, 0, 0)
 
-        grid_layout.addWidget(self._camera_label, 2, 0)
-        grid_layout.addWidget(self._camera_device_list_view, 3, 0)
+        grid_layout.addWidget(self._window_label, 1, 0)
+        grid_layout.addWidget(self._window_list_view, 2, 0)
 
-        grid_layout.addWidget(self._video_widget_label, 0, 1)
-        grid_layout.addWidget(self._video_widget, 1, 1, 1, 1)
-        grid_layout.addWidget(self._start_stop_button, 4, 0)
-        grid_layout.addWidget(self._status_label, 4, 1)
+        grid_layout.addWidget(self._camera_label, 3, 0)
+        grid_layout.addWidget(self._camera_device_list_view, 4, 0)
 
-        grid_layout.addWidget(self._camera_format_label, 2, 1)
-        grid_layout.addWidget(self._camera_format_list_view, 3, 1)
+        grid_layout.addWidget(self._video_widget_label, 1, 1)
+        grid_layout.addWidget(self._video_widget, 2, 1, 1, 1)
+        grid_layout.addWidget(self._start_stop_button, 5, 0)
+        grid_layout.addWidget(self._status_label, 5, 1)
+
+        grid_layout.addWidget(self._camera_format_label, 3, 1)
+        grid_layout.addWidget(self._camera_format_list_view, 4, 1)
 
         grid_layout.setColumnStretch(1, 1)
         grid_layout.setRowStretch(1, 1)
@@ -403,6 +413,22 @@ class FootageCaptureSettingsWidget(QtWidgets.QWidget):
                                                    Qt.ConnectionType.QueuedConnection)
         self._camera.errorOccurred.connect(self.on_camera_error_occured,
                                                    Qt.ConnectionType.QueuedConnection)
+
+    def on_camera_footage_checked(self, checked: Qt.CheckState):
+        """Disables/enables the widget selection when the capture footage checkbox is clicked"""
+
+        if checked == Qt.CheckState.Checked:
+            # enable all the widgets
+            self._start_stop_button.setEnabled(True)
+            self._window_list_view.setEnabled(True)
+            self._camera_device_list_view.setEnabled(True)
+            self._camera_format_list_view.setEnabled(True)
+        else:
+            # disable all the widgets
+            self._start_stop_button.setEnabled(False)
+            self._window_list_view.setEnabled(False)
+            self._camera_device_list_view.setEnabled(False)
+            self._camera_format_list_view.setEnabled(False)
 
     def on_current_window_selection_changed(self, selection):
         self.clear_error_string()
@@ -655,7 +681,7 @@ class CaptureDialog(QtWidgets.QDialog):
         tabs.addTab(self.telemetryWidget, "Telemetry Settings")
         
         self._button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Apply |
+            QtWidgets.QDialogButtonBox.StandardButton.Ok |
             QtWidgets.QDialogButtonBox.StandardButton.Cancel
         )
         self._button_box.accepted.connect(self.onAccepted)

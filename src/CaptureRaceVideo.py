@@ -8,6 +8,7 @@ import pathlib
 import logging
 import socket
 import select
+import datetime
 from enum import Enum, auto
 from fdp import ForzaDataPacket
 from time import sleep
@@ -171,38 +172,138 @@ class CameraFormatListModel(QAbstractListModel):
         self.endResetModel()
 
 
-class FootageCaptureManager(QObject):
+class FootageCapture(QObject):
     """A class to manage the recording and capture of race videos from window/application capture or camera input"""
 
     def __init__(self, parent = None):
         super().__init__(parent)
 
-    def startCapture(self):
+    def start(self):
         """Start recording from the selected video source"""
         ...
     
-    def stopCapture(self):
+    def stop(self):
         """Stop recording the video and save to a file"""
         ...
 
 
-class TelemetryCaptureManager(QObject):
+class TelemetryCaptureError(Enum):
+    """The possible errors that can be raised by a TelemetryCapture object"""
+    
+    PortChangeError = "Port cannot be changed while telemetry is being captured"
+    CaptureFailed = "Telemetry capture has failed"
+    BadPacketReceived = "Packet could not be processed"
+
+
+class TelemetryCapture(QObject):
     """A class to manage the recording and capture of Forza telemetry"""
-
-    def __init__(self, parent = None):
+    
+    class Signals(QObject):
+        collected = pyqtSignal(ForzaDataPacket)  # Emitted on collection of a forza data packet
+        errorOccurred = pyqtSignal(TelemetryCaptureError)
+        activeChanged = pyqtSignal(bool)
+            
+    def __init__(self, parent = None, port = None):
         super().__init__(parent)
+        self._signals = TelemetryCapture.Signals()
+        self._active = False  # Whether telemetry is currently being recorded
+        self._port: int = port  # The port that listens for incoming Forza data packets
+        self._packetsCollected = 0
+        self._invalidPacketsCollected = 0
+        self._threadpool = QThreadPool(self)
+        self._worker: UDPWorker = None
+        self._startTime: datetime.datetime = None  # The date and time that the object started recording
+        self._endTime: datetime.datetime = None  # The date and time that the object stopped recording
 
+    def start(self):
+        """Start recording telemetry"""
+        
+        if self._port is None:
+            self._signals.errorOccurred.emit(TelemetryCaptureError.CaptureFailed)
+            return
+
+        self._packetsCollected = 0
+        self._invalidPacketsCollected = 0
+        
+        self._worker = UDPWorker(self._port)
+        self._worker.setAutoDelete(True)
+        self._worker.signals.collected.connect(self._onCollected)
+        self._worker.signals.finished.connect(self._onFinished)
+        self._threadpool.start(self._worker)
+        self._setActive(True)
     
-    def startCapture(self):
-        """Start recording from the selected video source"""
-        ...
+    def _setActive(self, active: bool):
+        """Sets the active attribute"""
+        if active:
+            self._startTime = datetime.datetime.now()
+            self._endTime = None
+        else:
+            self._endTime = datetime.datetime.now()
+
+        self._active = active
+        self._signals.activeChanged.emit(active)
+        
+    def _onCollected(self, data: bytes):
+        """Called when a single UDP packet is collected. Receives the unprocessed
+        packet data, transforms it into a Forza Data Packet and emits the collected signal with
+        that forza data packet object. If packet cannot be read, it will emit an error signal"""
+
+        fdp: ForzaDataPacket = None
+        try:
+            fdp = ForzaDataPacket(data)
+            self._packetsCollected += 1
+            self._signals.collected.emit(fdp)
+        except:
+            # If it's not a forza packet
+            self._signals.errorOccurred.emit(TelemetryCaptureError.BadPacketReceived)
+            self._invalidPacketsCollected += 1
+
+        if self._packetsCollected % 60 == 0:
+            logging.debug(f"Received {self._packetsCollected} packets.")
+        if self._invalidPacketsCollected % 60 == 0:
+            logging.debug(f"Received {self._invalidPacketsCollected} invalid packets.")
+
+    def _onFinished(self):
+        """Cleans up after the worker has stopped listening to packets"""
+        self._setActive(False)
+
+    def stop(self):
+        """Stops recording telemetry"""
+        self._worker.finish()
     
-    def stopCapture(self):
-        """Stop recording the video and save to a file"""
-        ...
+    def setPort(self, port: int):
+        """Sets the port to listen to. If the object is currently capturing telemetry, the port will not change and an error will occur."""
+        if self._active:
+            self._signals.errorOccurred.emit(TelemetryCaptureError.PortChangeError)
+        else:
+            self._port = port
+    
+    def getPort(self) -> int:
+        """Returns the current port"""
+        return self._port
+    
+    def isActive(self) -> bool:
+        """Returns whether this object is currently capturing telemetry packets"""
+        return self._active
+
+    def getPacketsCollected(self) -> int:
+        """Returns the number of valid packets collected during the last capture session"""
+        return self._packetsCollected
+    
+    def getInvalidPacketsCollected(self) -> int:
+        """Returns the number of invalid packets collected during the last capture session"""
+        return self._invalidPacketsCollected
+
+    def getStartTime(self) -> datetime.datetime | None:
+        """Returns the start time of the last capture as a datetime object. Returns None if no capture session has started."""
+        return self._startTime
+    
+    def getEndTime(self) -> datetime.datetime | None:
+        """Returns the end time of the last capture as a datetime object. Returns None if no capture session has ended."""
+        return self._endTime
 
 
-class FootageCaptureWidget(QtWidgets.QWidget):
+class FootageCaptureSettingsWidget(QtWidgets.QWidget):
     """A widget to help configure settings for capturing race footage"""
 
     def __init__(self, parent = None):
@@ -386,12 +487,13 @@ class FootageCaptureWidget(QtWidgets.QWidget):
         return False
 
 
-class TelemetryCaptureWidget(QtWidgets.QWidget):
+class TelemetryCaptureSettingsWidget(QtWidgets.QWidget):
     """A widget to help configure settings to capture race telemetry"""
     
     def __init__(self, parent = None):
         super().__init__(parent)
 
+        self._telemetryCapture = TelemetryCapture()
         self._port = 1337
         self._packetsCollected = 0
         self._invalidPacketsCollected = 0
@@ -404,7 +506,7 @@ class TelemetryCaptureWidget(QtWidgets.QWidget):
         self.worker.signals.collected.connect(self.onCollected)
         self.worker.signals.finished.connect(self.onTestStopped)
 
-        self._ipLabel = QtWidgets.QLabel("IP Address: " + TelemetryCaptureWidget.getIP(), self)
+        self._ipLabel = QtWidgets.QLabel("IP Address: " + TelemetryCaptureSettingsWidget.getIP(), self)
         self._testDisplay = QtWidgets.QPlainTextEdit("Waiting for packets...", self)
         self._testDisplay.setReadOnly(True)
         self._testDisplayLabel = QtWidgets.QLabel("Connection Test Output")
@@ -535,8 +637,8 @@ class CaptureDialog(QtWidgets.QDialog):
     def __init__(self, parent = None):
         super().__init__(parent)
 
-        self.footageWidget = FootageCaptureWidget()
-        self.telemetryWidget = TelemetryCaptureWidget()
+        self.footageWidget = FootageCaptureSettingsWidget()
+        self.telemetryWidget = TelemetryCaptureSettingsWidget()
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self.footageWidget, "Footage Capture Settings")
         tabs.addTab(self.telemetryWidget, "Telemetry Settings")
@@ -569,12 +671,16 @@ class CaptureManager(QObject):
 
     def __init__(self, parent = None):
         super().__init__(parent)
-        self.footageManager = FootageCaptureManager()
-        self.telemetryManager = TelemetryCaptureManager()
-        
-        # To check if the user has chosen telemetry and capture settings
-        self.configured: bool = False
+        self.footageSession = FootageCapture()
+        self.telemetrySession = TelemetryCapture()
+
+        # If there is footage or telemetry currently being captured
+        self.capturing: bool = False
     
+    def isConfigured(self) -> bool:
+        """Returns True if the CaptureManager is ready to capture telemetry and footage"""
+        ...
+
     def openConfigureDialog(self):
         """Opens the dialog to help configure the capture settings"""
         
@@ -589,10 +695,18 @@ class CaptureManager(QObject):
         
         if not self.configured:
             QtWidgets.QMessageBox.critical(self.parent(), "Error", WarningMessages.CaptureSettingsNotConfigured.value)
+        
+        if self.capturing:
+            return
+        
         ...
     
     def stopCapture(self):
         """Stop recording the video and save to a file"""
+
+        if not self.capturing:
+            return
+        
         ...
     
     def toggleCapture(self, capture: bool):

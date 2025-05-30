@@ -16,7 +16,7 @@ from time import sleep
 from abc import abstractmethod
 from Utility import ForzaSettings
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class WarningMessages(Enum):
@@ -30,6 +30,7 @@ class TelemetryPersistenceError(Enum):
     """The possible errors that can be raised by a TelemetryPersistence object"""
     PersistenceFailed = "Telemetry persistence has failed and has stopped"
     PacketNotSaved = "Could not save packet"
+    AttributeNotSet = "Attribute cannot be set while persistence is active"
 
 
 class TelemetryPersistence(QObject):
@@ -89,7 +90,7 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
         Comma = ","
         Tab = "\t"
 
-    def __init__(self, delimiter: Delimiter, parent=None):
+    def __init__(self, delimiter: Delimiter = Delimiter.Comma, parent=None):
         """
         Constructs a new object to save telemetry to delimiter separated files.
         
@@ -106,14 +107,14 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
         self._csvWriter: csv.DictWriter | None = None  # The CSV Writer object if comma is the chosen delimiter
     
     def setPath(self, path: pathlib.Path | str):
-        """Sets the path to the directory that telemetry files should be saved to. Raises a ValueError if the
-        path given is not an accessible directory"""
+        """Sets the path to the directory that telemetry files should be saved to. Emits errorOccurred with an AttributeNotSet signal
+        if it cannot be set (eg. while the persistence is active)"""
 
         if isinstance(path, str):
             path = pathlib.Path(path).resolve()
         
         if not path.is_dir():
-            raise ValueError("Path is not a valid directory")
+            self.errorOccurred.emit(TelemetryPersistenceError.AttributeNotSet)
 
         self._path = path
 
@@ -122,9 +123,9 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
         return self._path
     
     def setDelimiter(self, delimiter: Delimiter):
-        """Sets the delimiter. Raises AttributeError if the object is active and the delimiter can't be changed."""
+        """Sets the delimiter. Emits the errorOccurred signal with AttributeNotSet if the object is active and the delimiter can't be changed."""
         if self._active:
-            raise AttributeError("Cannot change delimiter while object is active")
+            self.errorOccurred.emit(TelemetryPersistenceError.AttributeNotSet)
         else:
             self._delimiter = delimiter
     
@@ -147,7 +148,13 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
     def start(self):
         """Opens a new file and starts saving telemetry. Raises OSError if a file could not be opened."""
         
-        assert self._path is not None, "Path needs to be set before starting"
+        if self._path is None:
+            self.errorOccurred.emit(TelemetryPersistenceError.PersistenceFailed)
+            return
+        
+        if self._active:
+            return
+
         dt = datetime.datetime.now()
         filename = dt.strftime("%Y-%m-%d_%H-%M-%S")
 
@@ -170,7 +177,8 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
                 self._file.write('\t'.join(params))
                 self._file.write('\n')
         except OSError as e:
-            raise e
+            self.errorOccurred.emit(TelemetryPersistenceError.PersistenceFailed)
+            return
         
         self._setActive(True)
 
@@ -194,7 +202,6 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
             return
 
         params = ForzaSettings.paramsList
-        logging.info("Saving packet")
 
         try:
             if self._delimiter is self.Delimiter.Comma:
@@ -407,7 +414,7 @@ class TelemetryCapture(QObject):
     def start(self):
         """Start recording telemetry"""
         
-        if self._port is None:
+        if self._port is None or self._active:
             self.signals.errorOccurred.emit(TelemetryCaptureError.CaptureFailed)
             return
 
@@ -458,7 +465,7 @@ class TelemetryCapture(QObject):
 
     def stop(self):
         """Stops recording telemetry"""
-        if self._worker is not None:
+        if self._active and self._worker is not None:
             self._worker.finish()
     
     def setPort(self, port: int):
@@ -907,58 +914,87 @@ class CaptureDialog(QtWidgets.QDialog):
 
 
 class CaptureManager(QObject):
-    """A class to manage the recording and capture of Forza telemetry and race footage together"""
+    """
+    A class to manage the recording and capture of Forza telemetry and race footage together.
+    
+    By default CaptureManager uses the TelemetryDSVFilePersistence class to save telemetry packets to CSV files, but a directory
+    will need to be supplied first.
+    """
+
+    class Signals(QObject):
+        telemetryCaptureFailed = pyqtSignal()  # If telemetry capture has totally failed
 
     def __init__(self, parent = None):
         super().__init__(parent)
-        self.telemetrySession = TelemetryCapture()  # Captures data packets
-        self.telemetryPersistence: TelemetryPersistence = None  # Saves data packets
+        self.signals = CaptureManager.Signals()
+
+        self.telemetryCapture = TelemetryCapture()  # Captures data packets
+        self.telemetryPersistence: TelemetryPersistence = TelemetryDSVFilePersistence()  # Saves data packets
+
+        self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+        self.telemetryCapture.signals.errorOccurred.connect(self._onTelemetryCaptureError)
 
         # If there is footage or telemetry currently being captured
         self.capturing: bool = False
     
     def isReady(self) -> bool:
-        """Returns True if the CaptureManager is ready to capture telemetry and footage"""
-        if TelemetryPersistence is None: return False
-        if self.telemetrySession.ready() and self.telemetryPersistence.ready():
+        """Returns True if the CaptureManager is ready to capture telemetry"""
+        if not self.capturing and self.telemetryCapture.ready():
             return True
         else:
             return False
-
-    def openConfigureDialog(self):
-        """Opens the dialog to help configure the capture settings"""
-        
-        dlg = CaptureDialog()
-        if dlg.exec():
-            self.telemetrySession = dlg.telemetryWidget._telemetryCapture
-            self.telemetryPersistence = TelemetryDSVFilePersistence(TelemetryDSVFilePersistence.Delimiter.Comma)
-            self.telemetrySession.signals.collected.connect(self.telemetryPersistence.savePacket)
-            try:
-                self.telemetryPersistence.setPath(dlg.telemetryWidget._directoryPath)
-            except:
-                QtWidgets.QMessageBox.critical(None, "Telemetry Error", "Error: Destination Folder could not be set.")
-        else:
-            logging.info("Canceled")
     
     def startCapture(self):
-        """Start recording from the selected video source"""
-        if not self.isReady():
-            QtWidgets.QMessageBox.critical(None, "Capture Error", "Error: Configure all capture settings before starting telemetry capture.")
-            return
-        self.telemetryPersistence.start()
-        self.telemetrySession.start()
-        self.capturing = True
+        """Starts capturing telemetry. Starts saving packets if the TelemetryPersistence object is ready.
+        Also Starts capturing footage if there is a FootageCaptureManager connected and ready."""
+
+        if not self.capturing:
+            self.capturing = True
+            self.telemetryPersistence.start()
+            self.telemetryCapture.start()
     
     def stopCapture(self):
-        """Stop recording the video and save to a file"""
+        """Stops capturing telemetry, and also stops any persistence and footage manager currently active"""
         if self.capturing:
-            self.telemetrySession.stop()
+            self.telemetryCapture.stop()
             self.telemetryPersistence.stop()
             self.capturing = False
     
     def toggleCapture(self, capture: bool):
         """Starts or stops capturing footage and telemetry"""
+        logging.info(f"Toggle: {capture}")
         self.startCapture() if capture else self.stopCapture()
+
+    def setTelemetryCapture(self, telemetryCapture: TelemetryCapture):
+        """Sets the telemetry capture object of the capture manager as long as the
+        existing capture object is not currently capturing packets"""
+
+        if not self.capturing:
+            self.telemetryCapture = telemetryCapture
+            self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+    
+    def getTelemetryCapture(self) -> TelemetryCapture:
+        """Returns the current TelemetryCapture object"""
+        return self.telemetryCapture
+    
+    def setTelemetryPersistence(self, telemetryPersistence: TelemetryPersistence):
+        """Sets the Telemetry persistence object as long as the existing persistence object is
+        not currently saving packets"""
+        if not self.telemetryPersistence.isActive():
+            self.telemetryPersistence = telemetryPersistence
+            self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+    
+    def getTelemetryPersistence(self) -> TelemetryPersistence:
+        """Returns the current TelemetryPersistence object"""
+        return self.telemetryPersistence
+
+    def _onTelemetryCaptureError(self, error: TelemetryCaptureError):
+        """Called when the TelemetryCapture object signals an error"""
+
+        # If telemetry capture has failed, signal a failure and stop all persistence and footage capture
+        if error is TelemetryCaptureError.CaptureFailed:
+            self.stopCapture()
+            self.signals.telemetryCaptureFailed.emit()
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -969,6 +1005,7 @@ class MainWindow(QtWidgets.QMainWindow):
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
         self.captureManager = CaptureManager()
+        self.captureManager.signals.telemetryCaptureFailed.connect(self.onCaptureFailed)
 
         toolbar = QtWidgets.QToolBar()
         toolbar.setIconSize(QSize(16, 16))
@@ -977,17 +1014,32 @@ class MainWindow(QtWidgets.QMainWindow):
         # Status bar at the bottom of the application
         self.setStatusBar(QtWidgets.QStatusBar(self))
 
-        configureCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Configure Capture Settings", self)
-        configureCaptureAction.setStatusTip("Configure Capture Settings: Change the settings used for capturing race footage and telemetry.")
-        configureCaptureAction.triggered.connect(self.captureManager.openConfigureDialog)
-        toolbar.addAction(configureCaptureAction)
+        self.configureCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/gear.png"))), "Configure Capture Settings", self)
+        self.configureCaptureAction.setStatusTip("Configure Capture Settings: Change the settings used for capturing race footage and telemetry.")
+        self.configureCaptureAction.triggered.connect(self.openCaptureSettingsDialog)
+        toolbar.addAction(self.configureCaptureAction)
 
-        toggleCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Start/Stop Capture", self)
-        toggleCaptureAction.setStatusTip("Start/Stop Capture: Start/Stop capturing race footage and telemetry data.")
-        toggleCaptureAction.setCheckable(True)
-        toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
-        toolbar.addAction(toggleCaptureAction)
+        self.toggleCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Start/Stop Capture", self)
+        self.toggleCaptureAction.setStatusTip("Start/Stop Capture: Start/Stop capturing race footage and telemetry data.")
+        self.toggleCaptureAction.setCheckable(True)
+        self.toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
+        toolbar.addAction(self.toggleCaptureAction)
+    
+    def openCaptureSettingsDialog(self):
+        """Opens a dialog to change capture settings"""
+        
+        # As a test, hard code all the settings for now
+        telemetryCapture = self.captureManager.getTelemetryCapture()
+        telemetryPersistence: TelemetryDSVFilePersistence = self.captureManager.getTelemetryPersistence()
 
+        telemetryCapture.setPort(1337)
+        
+        if isinstance(telemetryPersistence, TelemetryDSVFilePersistence):
+            telemetryPersistence.setPath(str(pathlib.Path.home() / pathlib.Path("Documents")))
+
+    def onCaptureFailed(self):
+        QtWidgets.QMessageBox.critical(self, "Capture Error", "Capture has failed")
+        self.toggleCaptureAction.setChecked(False)
 
 def run():
     app = QtWidgets.QApplication(sys.argv)

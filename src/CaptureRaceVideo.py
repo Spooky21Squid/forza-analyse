@@ -16,7 +16,7 @@ from time import sleep
 from abc import abstractmethod
 from Utility import ForzaSettings
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 
 class WarningMessages(Enum):
@@ -898,6 +898,159 @@ class CaptureDialog(QtWidgets.QDialog):
         self.reject()
 
 
+class FootageCaptureError(Enum):
+    """The possible errors that can be raised by a FootageCapture object"""
+    
+    CaptureFailed = "Footage capture has failed"
+    RecordFailed = "Footage recording has failed"
+
+
+class FootageCapture(QObject):
+    """
+    A class to capture and record footage from either camera, screen or window. Basically a wrapper around
+    QMediaCaptureSession with some defaults.
+    
+    Default is to record the main screen to the user's home directory.
+    """
+
+    class Signals(QObject):
+        errorOccurred = pyqtSignal(FootageCaptureError, str)
+        activeChanged = pyqtSignal(bool)
+    
+    class SourceType(Enum):
+        """The footage's source type"""
+        Screen = auto()
+        Window = auto()
+        Camera = auto()
+    
+    def __init__(self, parent = None):
+        super().__init__(parent)
+
+        self._mediaCaptureSession = QMediaCaptureSession()
+        self._sourceType = self.SourceType.Screen
+        self._active: bool = False  # If footage is currently being captured
+        self.signals = self.Signals()
+
+        # Default to main screen capture
+        self._screenCapture = QScreenCapture()
+        self._screenCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._screenCapture.setScreen(QGuiApplication.primaryScreen())
+        self._mediaCaptureSession.setScreenCapture(self._screenCapture)
+        self._screenCapture.start()
+
+        self._windowCapture = QWindowCapture()
+        self._windowCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._mediaCaptureSession.setWindowCapture(self._windowCapture)
+
+        self._camera = QCamera()
+        self._camera.errorOccurred.connect(self._onFootageCaptureError)
+        self._mediaCaptureSession.setCamera(self._camera)
+
+        self._recorder = QMediaRecorder()
+        self._outputDirectory = pathlib.Path.home().resolve()  # Set output to user's home directory as default
+        self._recorder.errorOccurred.connect(self._onFootageRecordError)
+        self._mediaCaptureSession.setRecorder(self._recorder)
+    
+    def _onFootageCaptureError(self, error, errorString: str):
+        """Called when one of the sources for footage capture encounters an error"""
+
+        if isinstance(error, QScreenCapture.Error) and self._sourceType is self.SourceType.Screen:
+            self.signals.errorOccurred.emit(FootageCaptureError.CaptureFailed, errorString)
+        
+        if isinstance(error, QWindowCapture.Error) and self._sourceType is self.SourceType.Window:
+            self.signals.errorOccurred.emit(FootageCaptureError.CaptureFailed, errorString)
+        
+        if isinstance(error, QCamera.Error) and self._sourceType is self.SourceType.Camera:
+            self.signals.errorOccurred.emit(FootageCaptureError.CaptureFailed, errorString)
+
+    def _onFootageRecordError(self, error, errorString: str):
+        """Called when the recorder of the footage encounters an error"""
+        self.signals.errorOccurred.emit(FootageCaptureError.RecordFailed, errorString)
+
+    def isActive(self) -> bool:
+        """Returns True if footage is being captured and recorded"""
+        return self._active
+
+    def _setActive(self, active: bool):
+        """Sets the active attribute and emits the active changed signal"""
+        if not self._active == active:
+            self._active = active
+            self.signals.activeChanged.emit(active)
+
+    def start(self):
+        """Starts capturing and recording footage"""
+        dt = datetime.datetime.now()
+        extension = ".mp4"
+        prefix = "Forza-Session_"
+        filename = prefix + dt.strftime("%Y-%m-%d_%H-%M-%S") + extension
+        outputFile = self._outputDirectory / pathlib.Path(filename)
+        outputFile.resolve()
+        self._recorder.setOutputLocation(QUrl.fromLocalFile(str(self._outputDirectory / pathlib.Path(filename))))
+        self._setActive(True)
+        self._recorder.record()
+    
+    def stop(self):
+        """Stops recording footage"""
+        self._setActive(False)
+        self._recorder.stop()
+
+    def getSourceType(self):
+        """Returns the current source type"""
+        return self._sourceType
+
+    def setSourceType(self, sourceType):
+        """Change the source of the footage between the current screen, window or camera"""
+
+        self.footageSourceType = sourceType
+        self._screenCapture.setActive(sourceType == self.SourceType.Screen)
+        self._windowCapture.setActive(sourceType == self.SourceType.Window)
+        self._camera.setActive(sourceType == self.SourceType.Camera)
+
+    def getScreenCapture(self):
+        """Returns the current QScreenCapture object"""
+        return self._screenCapture
+    
+    def setScreenCapture(self, screenCapture: QScreenCapture):
+        """Sets the screen capture object"""
+        self._screenCapture.errorOccurred.disconnect(self._onFootageCaptureError)
+        screenCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._screenCapture = screenCapture
+    
+    def getWindowCapture(self):
+        """Returns the current QWindowCapture object"""
+        return self._windowCapture
+    
+    def setWindowCapture(self, windowCapture: QWindowCapture):
+        """Sets the Window capture object"""
+        self._windowCapture.errorOccurred.disconnect(self._onFootageCaptureError)
+        windowCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._windowCapture = windowCapture
+    
+    def getCamera(self):
+        """Returns the current QCamera object"""
+        return self._camera
+    
+    def setCamera(self, camera: QCamera):
+        """Sets the camera object"""
+        self._camera.errorOccurred.disconnect(self._onFootageCaptureError)
+        camera.errorOccurred.connect(self._onFootageCaptureError)
+        self._camera = camera
+
+    def getRecorder(self):
+        """Returns the QMediaRecorder"""
+        return self._recorder
+    
+    def setRecorder(self, recorder: QMediaRecorder):
+        """Sets the recorder. If changed while recording, an errorOccurred signal will be emitted and recording will stop"""
+        if self._active:
+            self.stop()
+            self.signals.errorOccurred.emit(FootageCaptureError.RecordFailed, "Recorder was changed during recording")
+        
+        self._recorder.errorOccurred.disconnect(self._onFootageRecordError)
+        recorder.errorOccurred.connect(self._onFootageRecordError)
+        self._recorder = recorder
+
+
 class CaptureManager(QObject):
     """
     A class to manage the recording and capture of Forza telemetry and race footage together.
@@ -910,7 +1063,8 @@ class CaptureManager(QObject):
 
     class Signals(QObject):
         telemetryCaptureFailed = pyqtSignal()  # If telemetry capture has totally failed
-        footageCaptureFailed = pyqtSignal(str)  # If footage capture has failed
+        telemetryPersistenceFailed = pyqtSignal()  # if telemetry persistence has failed and stopped
+        footageCaptureFailed = pyqtSignal(FootageCaptureError, str)  # If footage capture has failed
     
     class SourceType(Enum):
         """The footage's source type"""
@@ -923,30 +1077,11 @@ class CaptureManager(QObject):
         self.signals = CaptureManager.Signals()
 
         self.telemetryCapture = TelemetryCapture()  # Captures data packets
-        self.telemetryPersistence: TelemetryPersistence = TelemetryDSVFilePersistence()  # Saves data packets
-
-        self.mediaCaptureSession: QMediaCaptureSession = QMediaCaptureSession()
-
-        # Default to capturing the primary screen
-        self.footageSourceType = self.SourceType.Screen
-        screenCapture = QScreenCapture()
-        screenCapture.errorOccurred.connect(self._onFootageCaptureError)
-        screenCapture.setScreen(QGuiApplication.primaryScreen())
-        self.mediaCaptureSession.setScreenCapture(screenCapture)
-        screenCapture.start()
-
-        # Add empty capture objects for window and camera
-        self.mediaCaptureSession.setWindowCapture(QWindowCapture())
-        self.mediaCaptureSession.setCamera(QCamera())
-
-        # Recorder for the footage
-        recorder = QMediaRecorder()
-        recorder.setQuality(QMediaRecorder.Quality.NormalQuality)
-        recorder.errorOccurred.connect(self._onFootageRecordError)
-        self.mediaCaptureSession.setRecorder(recorder)
-
-        self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
         self.telemetryCapture.signals.errorOccurred.connect(self._onTelemetryCaptureError)
+        self.telemetryPersistence: TelemetryPersistence = TelemetryDSVFilePersistence()  # Saves data packets
+        self.telemetryPersistence.errorOccurred.connect(self._onTelemetryPersistenceError)
+        self.footageCapture = FootageCapture()  # Captures game footage
+        self.footageCapture.signals.errorOccurred.connect(self._onFootageCaptureError)
 
         # If there is footage or telemetry currently being captured
         self.capturing: bool = False
@@ -954,14 +1089,7 @@ class CaptureManager(QObject):
         # If the user wants to capture footage as well as telemetry
         self.captureFootage: bool = True
     
-    def isReady(self) -> bool:
-        """Returns True if the CaptureManager is ready to capture telemetry"""
-        if not self.capturing and self.telemetryCapture.ready():
-            return True
-        else:
-            return False
-    
-    def startCapture(self):
+    def start(self):
         """Starts capturing telemetry. Starts saving packets if the TelemetryPersistence object is ready.
         Also Starts capturing footage if there is a FootageCaptureManager connected and ready."""
 
@@ -971,39 +1099,65 @@ class CaptureManager(QObject):
             self.telemetryCapture.start()
 
             if self.captureFootage:
-                self.mediaCaptureSession.recorder().record()
+                self.footageCapture.start()
     
-    def stopCapture(self):
+    def stop(self):
         """Stops capturing telemetry, and also stops any persistence and footage manager currently active"""
         if self.capturing:
             self.capturing = False
             self.telemetryCapture.stop()
             self.telemetryPersistence.stop()
-            self.mediaCaptureSession.recorder().stop()
+            self.footageCapture.stop()
     
-    def toggleCapture(self, capture: bool):
+    def toggle(self, capture: bool):
         """Starts or stops capturing footage and telemetry"""
         logging.info(f"Toggle: {capture}")
-        self.startCapture() if capture else self.stopCapture()
+        self.start() if capture else self.stop()
 
     def setTelemetryCapture(self, telemetryCapture: TelemetryCapture):
-        """Sets the telemetry capture object of the capture manager as long as the
-        existing capture object is not currently capturing packets"""
+        """Sets the telemetry capture object. If currently capturing packets, capture will stop and an error will be emitted."""
 
-        if not self.capturing:
-            self.telemetryCapture = telemetryCapture
-            self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+        if self.capturing:
+            self.stop()
+            self.signals.telemetryCaptureFailed.emit()
+
+        self.telemetryCapture.signals.errorOccurred.disconnect(self._onTelemetryCaptureError)
+        self.telemetryCapture.signals.collected.disconnect(self.telemetryPersistence.savePacket)
+        telemetryCapture.signals.errorOccurred.connect(self._onTelemetryCaptureError)
+        telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+        self.telemetryCapture = telemetryCapture
     
     def getTelemetryCapture(self) -> TelemetryCapture:
         """Returns the current TelemetryCapture object"""
         return self.telemetryCapture
     
+    def setFootageCapture(self, footageCapture: FootageCapture):
+        """Sets the footage capture object of the capture manager. If the existing object is currently capturing packets, capture will
+        stop, emitting an error."""
+
+        if self.capturing:
+            self.stop()
+            self.signals.footageCaptureFailed.emit(FootageCaptureError.CaptureFailed, "Footage capture changed while recording was in progress")
+
+        self.footageCapture.signals.errorOccurred.disconnect(self._onFootageCaptureError)
+        footageCapture.signals.errorOccurred.connect(self._onFootageCaptureError)
+        self.footageCapture = footageCapture
+    
+    def getFootageCapture(self) -> FootageCapture:
+        """Returns the current FootageCapture object"""
+        return self.footageCapture
+
     def setTelemetryPersistence(self, telemetryPersistence: TelemetryPersistence):
-        """Sets the Telemetry persistence object as long as the existing persistence object is
-        not currently saving packets"""
-        if not self.telemetryPersistence.isActive():
-            self.telemetryPersistence = telemetryPersistence
-            self.telemetryCapture.signals.collected.connect(self.telemetryPersistence.savePacket)
+        """Sets the Telemetry persistence. If currently capturing, capture will stop and an error will be emitted"""
+        if self.capturing:
+            self.stop()
+            self.signals.telemetryPersistenceFailed.emit()
+        
+        self.telemetryPersistence.errorOccurred.disconnect(self._onTelemetryPersistenceError)
+        self.telemetryCapture.signals.collected.disconnect(self.telemetryPersistence.savePacket)
+        telemetryPersistence.errorOccurred.connect(self._onTelemetryPersistenceError)
+        self.telemetryCapture.signals.collected.connect(telemetryPersistence.savePacket)
+        self.telemetryPersistence = telemetryPersistence
     
     def getTelemetryPersistence(self) -> TelemetryPersistence:
         """Returns the current TelemetryPersistence object"""
@@ -1014,76 +1168,16 @@ class CaptureManager(QObject):
 
         # If telemetry capture has failed, signal a failure and stop all persistence and footage capture
         if error is TelemetryCaptureError.CaptureFailed:
-            self.stopCapture()
+            self.stop()
             self.signals.telemetryCaptureFailed.emit()
 
+    def _onTelemetryPersistenceError(self, error):
+        self.signals.telemetryPersistenceFailed.emit()
+
     def _onFootageCaptureError(self, error, errorString: str):
-        """Called when one of the sources for footage capture encounters an error"""
+        """Called when the FootageCapture object signals an error. Footage capture has stopped, but telemetry capture will continue"""
+        self.signals.footageCaptureFailed.emit(error, errorString)
 
-        if isinstance(error, QScreenCapture.Error) and self.footageSourceType is self.SourceType.Screen:
-            self.signals.footageCaptureFailed.emit(errorString)
-        
-        if isinstance(error, QWindowCapture.Error) and self.footageSourceType is self.SourceType.Window:
-            self.signals.footageCaptureFailed.emit(errorString)
-        
-        if isinstance(error, QCamera.Error) and self.footageSourceType is self.SourceType.Camera:
-            self.signals.footageCaptureFailed.emit(errorString)
-
-    def _onFootageRecordError(self, error, errorString: str):
-        """Called when the recorder of the footage encounters an error"""
-        self.signals.footageCaptureFailed.emit(errorString)
-
-    def setCameraDevice(self, camera: QCameraDevice):
-        """Sets the camera device to use for recording footage. A wrapper of QCamera's setCameraDevice()"""
-        self.mediaCaptureSession.camera().setCameraDevice(camera)
-    
-    def getCameraDevice(self) -> QCameraDevice:
-        """Returns the current camera device used for recording footage"""
-        return self.mediaCaptureSession.camera().cameraDevice()
-    
-    def setCameraFormat(self, format: QCameraFormat):
-        """Sets the camera format. A wrapper of QCamera's setCameraFormat()"""
-        self.mediaCaptureSession.camera().setCameraFormat(format)
-
-    def getCameraFormat(self) -> QCameraFormat:
-        """Returns the current camera format"""
-        return self.mediaCaptureSession.camera().cameraFormat()
-    
-    def setWindowCapture(self, windowCapture: QWindowCapture):
-        """Sets the window capture"""
-        self.mediaCaptureSession.setWindowCapture(windowCapture)
-    
-    def getWindowCapture(self) -> QWindowCapture | None:
-        """Returns the QWindowCapture"""
-        return self.mediaCaptureSession.windowCapture()
-    
-    def setScreenCapture(self, screenCapture: QScreenCapture):
-        """Sets the screen capture"""
-        self.mediaCaptureSession.setScreenCapture(screenCapture)
-    
-    def getScreenCapture(self) -> QScreenCapture | None:
-        """Returns the QScreenCapture"""
-        return self.mediaCaptureSession.screenCapture()
-
-    def changeSource(self, sourceType):
-        """Change the source of the footage between the current screen, window or camera"""
-
-        self.footageSourceType = sourceType
-
-        self.mediaCaptureSession.screenCapture().setActive(sourceType == self.SourceType.Screen)
-        self.mediaCaptureSession.windowCapture().setActive(sourceType == self.SourceType.Window)
-        self.mediaCaptureSession.camera().setActive(sourceType == self.SourceType.Camera)
-
-    def setFootageDestinationFolder(self, path: str | pathlib.Path):
-        """Sets the destination folder of the footage"""
-
-        if isinstance(path, pathlib.Path):
-            path = str(path)
-
-        self.mediaCaptureSession.recorder().setOutputLocation(QUrl(path))
-
-    def getFootageDestinationFolder(self) -> QUrl:
-        return self.mediaCaptureSession.recorder().outputLocation()
 
 class MainWindow(QtWidgets.QMainWindow):
 
@@ -1093,11 +1187,18 @@ class MainWindow(QtWidgets.QMainWindow):
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
 
         self.captureManager = CaptureManager()
-        self.captureManager.signals.telemetryCaptureFailed.connect(self.onCaptureFailed)
+        self.captureManager.signals.telemetryCaptureFailed.connect(self.onTelemetryCaptureFailed)
+        self.captureManager.signals.telemetryPersistenceFailed.connect(self.onTelemetryPersistenceFailed)
+        self.captureManager.signals.footageCaptureFailed.connect(self.onFootageCaptureFailed)
 
         toolbar = QtWidgets.QToolBar()
         toolbar.setIconSize(QSize(16, 16))
         self.addToolBar(toolbar)
+
+        # Video widget as the centre widget as a preview of the media capture session
+        self.videoPreview = QVideoWidget()
+        self.captureManager.getFootageCapture()._mediaCaptureSession.setVideoOutput(self.videoPreview)
+        self.setCentralWidget(self.videoPreview)
 
         # Status bar at the bottom of the application
         self.setStatusBar(QtWidgets.QStatusBar(self))
@@ -1110,7 +1211,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.toggleCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Start/Stop Capture", self)
         self.toggleCaptureAction.setStatusTip("Start/Stop Capture: Start/Stop capturing race footage and telemetry data.")
         self.toggleCaptureAction.setCheckable(True)
-        self.toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
+        self.toggleCaptureAction.triggered.connect(self.captureManager.toggle)
         toolbar.addAction(self.toggleCaptureAction)
     
     def openCaptureSettingsDialog(self):
@@ -1124,10 +1225,20 @@ class MainWindow(QtWidgets.QMainWindow):
         
         if isinstance(telemetryPersistence, TelemetryDSVFilePersistence):
             telemetryPersistence.setPath(str(pathlib.Path.home() / pathlib.Path("Documents")))
+        
+        footageCapture = self.captureManager.getFootageCapture()
+        footageCapture._outputDirectory = pathlib.Path.home() / pathlib.Path("Documents")
 
-    def onCaptureFailed(self):
+    def onTelemetryCaptureFailed(self):
         QtWidgets.QMessageBox.critical(self, "Capture Error", "Capture has failed")
         self.toggleCaptureAction.setChecked(False)
+
+    def onTelemetryPersistenceFailed(self):
+        QtWidgets.QMessageBox.critical(self, "Capture Error", "Persistence has failed")
+    
+    def onFootageCaptureFailed(self, error: FootageCaptureError, errorString: str):
+        QtWidgets.QMessageBox.critical(self, error.value, errorString)
+    
 
 def run():
     app = QtWidgets.QApplication(sys.argv)

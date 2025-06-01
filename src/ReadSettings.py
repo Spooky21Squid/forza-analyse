@@ -52,7 +52,7 @@ class SettingsManager(QObject):
         loaded = pyqtSignal()
         saved = pyqtSignal(str)  # Emits file path as a string
 
-    def __init__(self, path: QUrl | str | pathlib.Path, parent = None):
+    def __init__(self, path: QUrl | str | pathlib.Path = None, parent = None):
         """
         Creates a SettingsManager object given a path to the .ini file. The settings in the .ini file will be read and stored
         in the object.
@@ -65,7 +65,9 @@ class SettingsManager(QObject):
         self.signals = self.Signals()
         self._config = configparser.ConfigParser()
         self._path = None
-        self.load(path)
+
+        if path is not None:
+            self.load(path)
     
     def _setError(self, error: SettingsManagerError, description: str):
         """Emits the error"""

@@ -135,7 +135,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self._settings = SettingsManager(settingsFilePath)
         logging.info(self._settings._config.sections())
-        logging.info(self._settings.getSetting("recoring", "recordFootage"))
+        logging.info(self._settings.getSetting("recording", "recordFootage"))
         
 
 def run():

@@ -81,8 +81,8 @@ class SettingsManager(QObject):
         path = str(path)
 
         l = self._config.read(path)
+        self._path = path
         if len(l):
-            self._path = path
             self.signals.loaded.emit()
         else:
             self._setError(SettingsManagerError.LoadingFailed, "Couldn't load settings")

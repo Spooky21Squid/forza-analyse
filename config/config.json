@@ -1,0 +1,16 @@
+{
+  "recording": {
+    "port": 1337,
+    "recordFootage": false,
+    "deviceType": "Screen",
+    "deviceDescription": "default",
+    "deviceMinFrameRate": "default",
+    "deviceMaxFrameRate": "default",
+    "devicePixelFormat": "default",
+    "deviceResolutionWidth": "default",
+    "deviceResolutionHeight": "default"
+  },
+  "common": {
+    "folder": "home"
+  }
+}

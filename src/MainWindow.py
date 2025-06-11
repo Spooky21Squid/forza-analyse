@@ -10,6 +10,8 @@ import pandas as pd
 
 import distinctipy
 from fdp import ForzaDataPacket
+from CaptureMode import CaptureModeWidget
+from Settings import SettingsManager
 
 import datetime
 from time import sleep
@@ -240,24 +242,6 @@ class AnalyseModeWidget(QtWidgets.QFrame):
         self.grid.addWidget(self.placeholder, 0, 0)
 
 
-class CaptureModeWidget(QtWidgets.QFrame):
-    """Provides an interface that displays telemetry and previews from currently recorded packets and footage"""
-
-    def __init__(self, parent = None):
-        super().__init__(parent)
-
-        self.grid = QtWidgets.QGridLayout()
-        self.setLayout(self.grid)
-
-        # Displays status updates about telemetry capture
-        self.telemetryStatus = QtWidgets.QPlainTextEdit()
-        self.telemetryStatus.setReadOnly(True)
-    
-    def addTelemetryStatusEntry(self, entry: str):
-        """Adds a new status entry to the telemetry status plain text box"""
-        self.telemetryStatus.insertPlainText(f"{entry}\n")
-
-
 class CaptureStatusBar(QtWidgets.QFrame):
     """A horizontal status bar for capturing telemetry and footage"""
 
@@ -331,12 +315,21 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
+
+        # Import the app settings
+        settingsManager = SettingsManager()
+        settingsManager.load(str(parentDir / pathlib.Path("config/config.json")))
+
         self._closeTimer = QTimer()
         self._closeTimer.timeout.connect(self._onCloseTimerTimeout)
 
         # A DataFrame containing all the track details
         trackDetailsPath = parentDir / pathlib.Path("config/track-details.csv")
         self.forzaTrackDetails = pd.read_csv(str(trackDetailsPath), index_col="ordinal")
+
+        # Set the icon and title
+        self.setWindowIcon(QIcon(str(parentDir / pathlib.Path("assets/images/Forza-logo-512.png"))))
+        self.setWindowTitle("Forza Analyse")
 
         mainWidget = QtWidgets.QWidget()
         self.setCentralWidget(mainWidget)
@@ -358,7 +351,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setModeCapture()
 
         # Set up telemetry capture and try to start capturing
-        p = 1337  # -------------------------------JUST TO TEST, REPLACE WITH FULL SETTINGS ---------------------------------
+        p = settingsManager.get("recording", "port", default=7676)
         self.telemetryCapture = TelemetryCapture()
         self.telemetryCapture.signals.statusChanged.connect(self.captureStatus.setTelemetryCaptureStatus)
         self.telemetryCapture.signals.portChanged.connect(self.captureStatus.setPort)

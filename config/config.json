@@ -11,6 +11,6 @@
     "deviceResolutionHeight": "default"
   },
   "common": {
-    "folder": "home"
+    "folder": "default"
   }
 }

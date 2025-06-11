@@ -15,6 +15,7 @@ from fdp import ForzaDataPacket
 from time import sleep
 from abc import abstractmethod
 from Utility import ForzaSettings
+from ReadSettings import SettingsManager, SettingsManagerError
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1185,6 +1186,12 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
 
         parentDir = pathlib.Path(__file__).parent.parent.resolve()
+        
+        # Load settings from config.ini file
+        settingsFilePath = parentDir / pathlib.Path("config/config.ini")
+        self._settings = SettingsManager()
+        self._settings.signals.errorOccurred.connect(self.onSettingsError)
+        self._settings.load(settingsFilePath)
 
         self.captureManager = CaptureManager()
         self.captureManager.signals.telemetryCaptureFailed.connect(self.onTelemetryCaptureFailed)
@@ -1216,6 +1223,10 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def openCaptureSettingsDialog(self):
         """Opens a dialog to change capture settings"""
+
+        captureDialog = CaptureDialog()
+        if captureDialog.exec():
+            pass
         
         # As a test, hard code all the settings for now
         telemetryCapture = self.captureManager.getTelemetryCapture()
@@ -1238,6 +1249,15 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def onFootageCaptureFailed(self, error: FootageCaptureError, errorString: str):
         QtWidgets.QMessageBox.critical(self, error.value, errorString)
+    
+    def onSettingsError(self, error, errorString):
+        if error is SettingsManagerError.LoadingFailed:
+            QtWidgets.QMessageBox.critical(self, "Settings Error", "Error: Config settings could not be loaded. Please check that config.ini exists.")
+        elif error is SettingsManagerError.LoadingFailed:
+            QtWidgets.QMessageBox.critical(self, "Settings Error", "Error: Config settings could not be saved.")
+        elif error is SettingsManagerError.EditFailed:
+            QtWidgets.QMessageBox.critical(self, "Settings Error", "Error: Config setting could not be edited.")
+
     
 
 def run():

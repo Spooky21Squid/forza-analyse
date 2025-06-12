@@ -149,11 +149,13 @@ class CaptureOverview(QtWidgets.QFrame):
         self.setLayout(lt)
 
         self.videoPreview = QVideoWidget()
+        self.videoPreview.setMinimumHeight(200)
         lt.addWidget(self.videoPreview)
 
         self.laptimesView = QtWidgets.QTableView()
         self.laptimesModel = LaptimeModel()
         self.laptimesView.setModel(self.laptimesModel)
+        lt.addWidget(self.laptimesView)
     
     def getVideoWidget(self) -> QVideoWidget:
         return self.videoPreview

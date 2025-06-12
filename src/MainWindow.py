@@ -10,9 +10,11 @@ import pandas as pd
 
 import distinctipy
 from fdp import ForzaDataPacket
+from Utility import ForzaSettings
 from CaptureMode import CaptureModeWidget
 from Settings import SettingsManager
 
+import csv
 import datetime
 from time import sleep
 import pathlib
@@ -242,6 +244,248 @@ class FootageCapture(QObject):
         self._mediaCaptureSession.setVideoOutput(videoOutput)
 
 
+class TelemetryPersistence(QObject):
+    """An abstract base class for saving telemetry packets received on demand."""
+
+
+    class Error(Enum):
+        """The possible errors that can be raised by a TelemetryPersistence object"""
+        PersistenceFailed = "Telemetry persistence has failed and has stopped"
+        PacketNotSaved = "Could not save packet"
+        AttributeNotSet = "Attribute cannot be set while persistence is active"
+
+    
+    class Signals(QObject):
+        errorOccurred = pyqtSignal(object)  # Emits with a TelemetryPersistence.Error object
+        activeChanged = pyqtSignal(bool)
+
+        # Emitted after the first packet was accepted to be saved. Signal is emitted with a track ordinal, a car ordinal,
+        # and the date and time that the first saved packet was collected
+        firstPacketSaved = pyqtSignal(int, int, datetime.datetime)
+
+
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self._active = False  # Whether object is currently performing any persistence
+        self.signals = self.Signals()
+    
+    @abstractmethod
+    def start(self):
+        """Starts saving telemetry"""
+        ...
+    
+    @abstractmethod
+    def stop(self):
+        """Stops saving telemetry"""
+        ...
+    
+    @abstractmethod
+    def savePacket(self, fdp: ForzaDataPacket):
+        """Saves a single Forza Data Packet"""
+        ...
+    
+    @abstractmethod
+    def ready(self):
+        """Returns True if object is ready to save telemetry"""
+        ...
+
+    def isActive(self) -> bool:
+        """Returns True if the object is active"""
+        return self._active
+
+    def _setActive(self, active: bool):
+        """Sets the active attribute and emits the active changed signal"""
+        if not self._active == active:
+            self._active = active
+            self.signals.activeChanged.emit(active)
+
+
+class TelemetryDSVFilePersistence(TelemetryPersistence):
+    """
+    Saves Forza Data Packets to Delimiter Separated Files. This class takes a path to a directory (like the user's home
+    directory) and saves telemetry to new files using the time of the start of the session to name the file, and the track
+    ordinal to choose the specific track directory.
+
+    Telemetry will be saved in the same file as long as the player stays on one track. If a new packet arrives with a different
+    track ID, the previous file will be closed and a new file will be opened using a new start time as the file name.
+
+    Packets collected while the race is not on will be ignored.
+    """
+
+    class Delimiter(Enum):
+        """Types of delimiter to be used to separate values in the same row"""
+        Comma = ","
+        Tab = "\t"
+
+    def __init__(self, delimiter: Delimiter = Delimiter.Comma, parent=None):
+        """
+        Constructs a new object to save telemetry to delimiter separated files.
+        
+        Parameters
+        ----------
+        delimiter : The type of delimiter that will separate fields in a packet
+        parent : The parent widget
+        """
+
+        super().__init__(parent)
+        self._file = None  # The file object used to write telemetry
+        self._delimiter: TelemetryDSVFilePersistence.Delimiter = delimiter  # To use commas or tabs to separate the entries
+        self._path: pathlib.Path | None = None  # Path to the parent directory (above specific track directories) to save the file in
+        self._csvWriter: csv.DictWriter | None = None  # The CSV Writer object if comma is the chosen delimiter
+        self._onlySaveRaceOn: bool = True  # If True, only packets received while the race is on will be saved
+        self._firstPacketReceived = False
+        self._currentTrackOrdinal: int | None = None
+        self._currentCarOrdinal: int | None = None
+    
+    def setOnlySaveRaceOn(self, value: bool):
+        """If value is True, only packets received while the race is on will be saved. If False, all packets (including
+        when the race is not on) will be saved. If this is changed while the object is active, it will affect packets
+        received after the attribute was changed."""
+        self._onlySaveRaceOn = value
+    
+    def getOnlySaveRaceOn(self) -> bool:
+        """Returns whether the object is only saving packets during a race"""
+        return self._onlySaveRaceOn
+    
+    def setPath(self, path: pathlib.Path | str):
+        """Sets the path to the parent directory that telemetry files should be saved to. Files will be saved under their specific
+        track directory under this parent directory. Emits errorOccurred with an AttributeNotSet signal if it cannot be set
+        (eg. while the persistence is active)"""
+
+        if isinstance(path, str):
+            path = pathlib.Path(path).resolve()
+        
+        if not path.is_dir():
+            self.signals.errorOccurred.emit(self.Error.AttributeNotSet)
+
+        self._path = path
+
+    def getPath(self) -> pathlib.Path | None:
+        """Returns the current path, or None if it has not been set."""
+        return self._path
+    
+    def setDelimiter(self, delimiter: Delimiter):
+        """Sets the delimiter. Emits the errorOccurred signal with AttributeNotSet if the object is active and the delimiter can't be changed."""
+        if self._active:
+            self.signals.errorOccurred.emit(self.Error.AttributeNotSet)
+        else:
+            self._delimiter = delimiter
+    
+    def getDelimiter(self) -> Delimiter:
+        """Returns the type of delimiter being used"""
+        return self._delimiter
+
+    def _to_str(value):
+        """
+        Returns a string representation of the given value, if it's a floating
+        number, format it.
+
+        :param value: the value to format
+        """
+        if isinstance(value, float):
+            return('{:f}'.format(value))
+
+        return('{}'.format(value))
+
+    def start(self):
+        """Starts saving telemetry. Once the first packet has been received, a new file will be opened
+        in it's track's specific directory and packets will be written"""
+        
+        if self._path is None:
+            self.signals.errorOccurred.emit(self.Error.PersistenceFailed)
+            return
+        
+        if self._active:
+            return
+
+        self._firstPacketReceived = False
+        self._setActive(True)
+
+    def stop(self):
+        """Stops saving telemetry and closes the file"""
+        
+        if not self._active:
+            return
+        
+        self._setActive(False)
+        if self._file is not None:
+            self._file.close()
+    
+    def savePacket(self, fdp: ForzaDataPacket):
+        """Receives a single Forza Data Packet and decides how or if it should be saved, and saves it."""
+        
+        if not self._active:
+            return
+        
+        # Discard packets that are received when the race is not on if they are not being saved
+        if not fdp.is_race_on and self._onlySaveRaceOn:
+            return
+
+        # If the car ordinal or track ordinal is different, player has started a new session, so stop saving packets and restart
+        if self._firstPacketReceived and (fdp.track_ordinal != self._currentTrackOrdinal or fdp.car_ordinal != self._currentCarOrdinal):
+            self.stop()
+            self.start()
+            return
+        
+        # If this is the first packet received, set up the file
+        if not self._firstPacketReceived:
+
+            # build the file path and name
+            dt = datetime.datetime.now()
+            filename = dt.strftime("%Y-%m-%d_%H-%M-%S")
+            if self._delimiter is TelemetryDSVFilePersistence.Delimiter.Comma:
+                filename += ".csv"
+            elif self._delimiter is TelemetryDSVFilePersistence.Delimiter.Tab:
+                filename += ".tsv"
+            filename = "Forza-Session_" + filename
+            trackOrdinal = str(fdp.track_ordinal)
+            path = self._path / pathlib.Path(trackOrdinal) / pathlib.Path(filename)
+
+            # Prepare the file
+            try:
+                self._file = open(str(path), "w")
+                # Add the header row
+                params = ForzaSettings.paramsList
+                if self._delimiter is TelemetryDSVFilePersistence.Delimiter.Comma:
+                    self._csvWriter = csv.writer(self._file, lineterminator = "\r")
+                    self._csvWriter.writerow(params)
+                else:
+                    self._file.write('\t'.join(params))
+                    self._file.write('\n')
+            except OSError as e:
+                if self._file != None:
+                    self._file.close()
+                self.signals.errorOccurred.emit(self.Error.PersistenceFailed)
+                return
+            self._firstPacketReceived = True  # Set to true so file isn't set up next time
+
+            # Emit the firstPacketSaved signal
+            self.signals.firstPacketSaved.emit(fdp.track_ordinal, fdp.car_ordinal, dt)
+
+            # Set the current track and car ordinals
+            self._currentTrackOrdinal = fdp.track_ordinal
+            self._currentCarOrdinal = fdp.car_ordinal
+
+        # Now can save the packet
+
+        params = ForzaSettings.paramsList
+
+        try:
+            if self._delimiter is self.Delimiter.Comma:
+                self._csvWriter.writerow(fdp.to_list(params))
+            else:
+                self._file.write('\t'.join([self._to_str(v) for v in fdp.to_list(params)]))
+                self._file.write('\n')
+        except:
+            self.signals.errorOccurred.emit(self.Error.PacketNotSaved)
+
+    def ready(self):
+        if self._path is not None and not self._active:
+            return True
+        else:
+            return False
+
+
 class TelemetryCapture(QObject):
     """Captures Forza telemetry packets. This class manages a UDPWorker and tries to transform any collected packets into
     ForzaDataPacket objects. When a valid packet is collected a signal is emitted containing that ForzaDataPacket object
@@ -401,6 +645,95 @@ class TelemetryCapture(QObject):
         return self._status
 
 
+class TelemetryManager(QObject):
+    """Manages and coordinates the capture and persistence of Forza telemetry"""
+
+
+    class Signals(QObject):
+        """All the signals produced by the TelemetryManager class"""
+
+        # Telemetry is being captured AND has started recording to a file. Signal is emitted with a track ordinal, a car ordinal,
+        # and the date and time that the first saved packet was collected
+        startedRecording = pyqtSignal(int, int, datetime.datetime)
+
+        # Telemetry has stopped being recorded to a file. Telemetry may still be captured from a socket
+        stoppedRecording = pyqtSignal()
+
+    
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self.signals = self.Signals()
+        self._telemetryCapture: TelemetryCapture | None = None
+        self._telemetryPersistence: TelemetryPersistence | None = None
+    
+    def getTelemetryCapture(self) -> TelemetryCapture | None:
+        """Return the current TelemetryManager object, or None if not set"""
+        return self._telemetryCapture
+    
+    def setTelemetryCapture(self, telemetryCapture: TelemetryCapture):
+        """Adds a new TelemetryCapture object to the TelemetryManager"""
+        # Unlink the old telemetry capture object's signals and slots and link the new
+        if self._telemetryPersistence is not None:
+            self._telemetryCapture.signals.collected.disconnect(self._telemetryPersistence.savePacket)
+            telemetryCapture.signals.collected.connect(self._telemetryPersistence.savePacket)
+        telemetryCapture.signals.errorOccurred.connect(self._onTelemetryCaptureError)
+
+        # Add the new capture object
+        self._telemetryCapture = telemetryCapture
+    
+    def getTelemetryPersistence(self) -> TelemetryPersistence | None:
+        """Return the current TelemetryPersistence object, or None if not set"""
+        return self._telemetryPersistence
+
+    def setTelemetryPersistence(self, telemetryPersistence: TelemetryPersistence):
+        """Adds a new TelemetryPersistence object to the TelemetryManager"""
+        # Unlink the old telemetry persistence object's signals and slots and link the new
+        if self._telemetryCapture is not None:
+            self._telemetryCapture.signals.collected.disconnect(self._telemetryPersistence.savePacket)
+            self._telemetryCapture.signals.collected.connect(telemetryPersistence.savePacket)
+        telemetryPersistence.signals.activeChanged.connect(self._onTelemetryPersistenceActiveChanged)
+        telemetryPersistence.signals.firstPacketSaved.connect(self._onTelemetryPersistenceFirstPacket)
+
+        # Add the new capture object
+        self._telemetryPersistence = telemetryPersistence
+    
+    def _onTelemetryCaptureActiveChanged(self, value: bool):
+        if not value:
+            if self._telemetryPersistence is not None:
+                self._telemetryPersistence.stop()
+    
+    def _onTelemetryPersistenceActiveChanged(self, value: bool):
+        if not value:
+            self.signals.stoppedRecording.emit()
+    
+    def _onTelemetryPersistenceFirstPacket(self, trackOrdinal: int, carOrdinal: int, dt: datetime.datetime):
+        self.signals.startedRecording.emit(trackOrdinal, carOrdinal, dt)
+
+    
+
+
+class CaptureManager(QObject):
+    """Manages and coordinates the capture of Forza telemetry and footage"""
+
+    def __init__(self, parent = None):
+        super().__init__(parent)
+        self._telemetryManager: TelemetryManager | None = None
+        self._footageCapture: FootageCapture | None = None
+
+    def setTelemetryManager(self, telemetryManager: TelemetryManager):
+        """Adds a new TelemetryManager object to the CaptureManager"""
+        # Unlink the old telemetry manager object's signals and slots
+
+        # Add the new manager
+        self._telemetryManager = telemetryManager
+
+        # Link the new manager
+    
+    def getTelemetryManager(self) -> TelemetryManager | None:
+        """Returns the current TelemetryManager object. Returns None if no manager set"""
+        return self._telemetryManager
+
+
 class AnalyseModeWidget(QtWidgets.QFrame):
     """Provides an interface for analysing forza telemetry files and footage"""
 
@@ -492,6 +825,15 @@ class MainWindow(QtWidgets.QMainWindow):
         settingsManager = SettingsManager()
         settingsManager.load(str(parentDir / pathlib.Path("config/config.json")))
 
+        # Get the details of the directory to save telemetry and footage to
+        parentFolder = settingsManager.get("common", "parentFolder", default="default")
+        if parentFolder == "default":
+            parentFolder = pathlib.Path().home()
+        else:
+            parentFolder = pathlib.Path(parentFolder)
+        folderName = settingsManager.get("common", "folderName", default="forza-analyse")
+        saveDirectory = parentFolder / pathlib.Path(folderName)
+
         self._closeTimer = QTimer()
         self._closeTimer.timeout.connect(self._onCloseTimerTimeout)
 
@@ -513,14 +855,7 @@ class MainWindow(QtWidgets.QMainWindow):
         vbLayout.addWidget(self.captureStatus)
 
         # Set up the footage capture using the directories from the settings file
-        parentFolder = settingsManager.get("common", "parentFolder", default="default")
-        if parentFolder == "default":
-            parentFolder = pathlib.Path().home()
-        else:
-            parentFolder = pathlib.Path(parentFolder)
-        folderName = settingsManager.get("common", "folderName", default="forza-analyse")
-        footageDirectory = parentFolder / pathlib.Path(folderName)
-        self.footageCapture = FootageCapture(footageDirectory=str(footageDirectory.resolve()))
+        self.footageCapture = FootageCapture(footageDirectory=str(saveDirectory.resolve()))
 
         # Add display widgets for each mode
         self.analyseMode = AnalyseModeWidget()
@@ -542,6 +877,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telemetryCapture.signals.portChanged.connect(self.captureStatus.setPort)
         self.telemetryCapture.setPort(p)
         self.telemetryCapture.start()
+
+        # Add and configure the Manager objects
+        self.captureManager = CaptureManager()
+        self.telemetryManager = TelemetryManager()
+        self.telemetryManager.setTelemetryCapture(self.telemetryCapture)
         
         # Add the Toolbar and Actions --------------------------
 

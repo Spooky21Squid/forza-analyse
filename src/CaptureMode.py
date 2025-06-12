@@ -154,6 +154,9 @@ class CaptureOverview(QtWidgets.QFrame):
         self.laptimesView = QtWidgets.QTableView()
         self.laptimesModel = LaptimeModel()
         self.laptimesView.setModel(self.laptimesModel)
+    
+    def getVideoWidget(self) -> QVideoWidget:
+        return self.videoPreview
 
 
 class TelemetryPlotItem(pg.PlotItem):
@@ -232,3 +235,7 @@ class CaptureModeWidget(QtWidgets.QFrame):
         lt.addWidget(splitter)
         splitter.addWidget(self.captureOverview)
         splitter.addWidget(self.plots)
+    
+    def getVideoPreview(self) -> QVideoWidget:
+        """Returns the video widget used as a preview for footage capture"""
+        return self.captureOverview.getVideoWidget()

@@ -1,7 +1,7 @@
 from PyQt6 import QtWidgets, QtMultimedia
 from PyQt6.QtCore import pyqtSlot, QThread, QObject, pyqtSignal, Qt, QSize, QUrl, QAbstractTableModel, QItemSelection, QModelIndex, QRunnable, QThreadPool, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap, QPen, QCloseEvent
-from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QColor, QStandardItemModel, QStandardItem, QPixmap, QPen, QCloseEvent, QGuiApplication
+from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QCameraDevice, QCameraFormat, QScreenCapture, QWindowCapture, QMediaRecorder
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 
 import pyqtgraph as pg
@@ -76,6 +76,170 @@ class UDPWorker(QRunnable):
         """Changes the port that the worker will listen to. If already running, this will do nothing until the worker is
         started again."""
         self.port = port
+
+
+class FootageCapture(QObject):
+    """
+    A class to capture and record footage from either camera, screen or window. Basically a wrapper around
+    QMediaCaptureSession with some defaults.
+    
+    Default is to record the main screen to the user's home directory.
+    """
+
+    class Error(Enum):
+        """The possible errors that can be raised by a FootageCapture object"""
+    
+        CaptureFailed = "Footage capture has failed"
+        RecordFailed = "Footage recording has failed"
+
+
+    class Signals(QObject):
+        errorOccurred = pyqtSignal(object, str)  # Emits a FootageCapture.Error and descriptive string
+        activeChanged = pyqtSignal(bool)
+    
+
+    class SourceType(Enum):
+        """The footage's source type"""
+        Screen = auto()
+        Window = auto()
+        Camera = auto()
+    
+
+    def __init__(self, parent = None, footageDirectory: str = None):
+        super().__init__(parent)
+
+        self._mediaCaptureSession = QMediaCaptureSession()
+        self._sourceType = self.SourceType.Screen
+        self._active: bool = False  # If footage is currently being captured
+        self.signals = self.Signals()
+
+        # Default to main screen capture
+        self._screenCapture = QScreenCapture()
+        self._screenCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._screenCapture.setScreen(QGuiApplication.primaryScreen())
+        self._mediaCaptureSession.setScreenCapture(self._screenCapture)
+        self._screenCapture.start()
+
+        # Add option to capture a single window
+        self._windowCapture = QWindowCapture()
+        self._windowCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._mediaCaptureSession.setWindowCapture(self._windowCapture)
+
+        # Add option to record a camera, eg. an elgato
+        self._camera = QCamera()
+        self._camera.errorOccurred.connect(self._onFootageCaptureError)
+        self._mediaCaptureSession.setCamera(self._camera)
+
+        # Add the recorder to save the media capture session to a file
+        self._recorder = QMediaRecorder()
+        self._outputDirectory = pathlib.Path.home().resolve()  # Set output to user's home directory as default
+        if footageDirectory is not None and footageDirectory != "default":
+            self._outputDirectory = pathlib.Path(footageDirectory).resolve()
+        self._recorder.errorOccurred.connect(self._onFootageRecordError)
+        self._mediaCaptureSession.setRecorder(self._recorder)
+    
+    def _onFootageCaptureError(self, error, errorString: str):
+        """Called when one of the sources for footage capture encounters an error"""
+
+        if isinstance(error, QScreenCapture.Error) and self._sourceType is self.SourceType.Screen:
+            self.signals.errorOccurred.emit(self.Error.CaptureFailed, errorString)
+        
+        if isinstance(error, QWindowCapture.Error) and self._sourceType is self.SourceType.Window:
+            self.signals.errorOccurred.emit(self.Error.CaptureFailed, errorString)
+        
+        if isinstance(error, QCamera.Error) and self._sourceType is self.SourceType.Camera:
+            self.signals.errorOccurred.emit(self.Error.CaptureFailed, errorString)
+
+    def _onFootageRecordError(self, error, errorString: str):
+        """Called when the recorder of the footage encounters an error"""
+        self.signals.errorOccurred.emit(self.Error.RecordFailed, errorString)
+
+    def isActive(self) -> bool:
+        """Returns True if footage is being captured and recorded"""
+        return self._active
+
+    def _setActive(self, active: bool):
+        """Sets the active attribute and emits the active changed signal"""
+        if not self._active == active:
+            self._active = active
+            self.signals.activeChanged.emit(active)
+
+    def start(self):
+        """Starts capturing and recording footage"""
+        dt = datetime.datetime.now()
+        extension = ".mp4"
+        prefix = "Forza-Session_"
+        filename = prefix + dt.strftime("%Y-%m-%d_%H-%M-%S") + extension
+        outputFile = self._outputDirectory / pathlib.Path(filename)
+        outputFile.resolve()
+        self._recorder.setOutputLocation(QUrl.fromLocalFile(str(self._outputDirectory / pathlib.Path(filename))))
+        self._setActive(True)
+        self._recorder.record()
+    
+    def stop(self):
+        """Stops recording footage"""
+        self._setActive(False)
+        self._recorder.stop()
+
+    def getSourceType(self):
+        """Returns the current source type"""
+        return self._sourceType
+
+    def setSourceType(self, sourceType):
+        """Change the source of the footage between the current screen, window or camera"""
+
+        self.footageSourceType = sourceType
+        self._screenCapture.setActive(sourceType == self.SourceType.Screen)
+        self._windowCapture.setActive(sourceType == self.SourceType.Window)
+        self._camera.setActive(sourceType == self.SourceType.Camera)
+
+    def getScreenCapture(self):
+        """Returns the current QScreenCapture object"""
+        return self._screenCapture
+    
+    def setScreenCapture(self, screenCapture: QScreenCapture):
+        """Sets the screen capture object"""
+        self._screenCapture.errorOccurred.disconnect(self._onFootageCaptureError)
+        screenCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._screenCapture = screenCapture
+    
+    def getWindowCapture(self):
+        """Returns the current QWindowCapture object"""
+        return self._windowCapture
+    
+    def setWindowCapture(self, windowCapture: QWindowCapture):
+        """Sets the Window capture object"""
+        self._windowCapture.errorOccurred.disconnect(self._onFootageCaptureError)
+        windowCapture.errorOccurred.connect(self._onFootageCaptureError)
+        self._windowCapture = windowCapture
+    
+    def getCamera(self):
+        """Returns the current QCamera object"""
+        return self._camera
+    
+    def setCamera(self, camera: QCamera):
+        """Sets the camera object"""
+        self._camera.errorOccurred.disconnect(self._onFootageCaptureError)
+        camera.errorOccurred.connect(self._onFootageCaptureError)
+        self._camera = camera
+
+    def getRecorder(self):
+        """Returns the QMediaRecorder"""
+        return self._recorder
+    
+    def setRecorder(self, recorder: QMediaRecorder):
+        """Sets the recorder. If changed while recording, an errorOccurred signal will be emitted and recording will stop"""
+        if self._active:
+            self.stop()
+            self.signals.errorOccurred.emit(self.Error.RecordFailed, "Recorder was changed during recording")
+        
+        self._recorder.errorOccurred.disconnect(self._onFootageRecordError)
+        recorder.errorOccurred.connect(self._onFootageRecordError)
+        self._recorder = recorder
+    
+    def setVideoPreview(self, videoOutput: QObject):
+        """Sets a new video widget as the output for the media session"""
+        self._mediaCaptureSession.setVideoOutput(videoOutput)
 
 
 class TelemetryCapture(QObject):
@@ -340,13 +504,26 @@ class MainWindow(QtWidgets.QMainWindow):
         self.captureStatus = CaptureStatusBar()
         vbLayout.addWidget(self.captureStatus)
 
+        # Set up the footage capture using the directories from the settings file
+        parentFolder = settingsManager.get("common", "parentFolder", default="default")
+        if parentFolder == "default":
+            parentFolder = pathlib.Path().home()
+        else:
+            parentFolder = pathlib.Path(parentFolder)
+        folderName = settingsManager.get("common", "folderName", default="forza-analyse")
+        footageDirectory = parentFolder / pathlib.Path(folderName)
+        self.footageCapture = FootageCapture(footageDirectory=str(footageDirectory.resolve()))
+
+        # Add display widgets for each mode
+        self.analyseMode = AnalyseModeWidget()
+        self.captureMode = CaptureModeWidget()
+        self.footageCapture.setVideoPreview(self.captureMode.getVideoPreview())
+
         # Create a stacked widget - each child is a different mode (eg. analyse, record)
         self.stackedModes = QtWidgets.QStackedWidget()
         vbLayout.addWidget(self.stackedModes)
-        self.analyseMode = AnalyseModeWidget()
-        self.recordMode = CaptureModeWidget()
         self.stackedModes.addWidget(self.analyseMode)
-        self.stackedModes.addWidget(self.recordMode)
+        self.stackedModes.addWidget(self.captureMode)
         self.mode = self.ModeIndex.AnalyseMode
         self.setModeCapture()
 

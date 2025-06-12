@@ -11,6 +11,7 @@
     "deviceResolutionHeight": "default"
   },
   "common": {
-    "folder": "default"
+    "parentFolder": "default",
+    "folderName": "forza-analyse"
   }
 }

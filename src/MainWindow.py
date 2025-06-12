@@ -78,14 +78,6 @@ class UDPWorker(QRunnable):
         self.port = port
 
 
-class TelemetryCaptureError(Enum):
-    """The possible errors that can be raised by a TelemetryCapture object"""
-    
-    PortChangeError = "Port cannot be changed while telemetry is being captured"
-    CaptureFailed = "Telemetry capture has failed"
-    BadPacketReceived = "Packet could not be processed"
-
-
 class TelemetryCapture(QObject):
     """A class to manage the recording and capture of Forza telemetry"""
 
@@ -93,11 +85,19 @@ class TelemetryCapture(QObject):
         NotListening = auto()  # No socket set up
         Listening = auto()  # Socket and port set up, listening for packets but no Forza packets are being detected
         Capturing = auto()  # Forza packets detected and being captured
+    
+
+    class Error(Enum):
+        """The possible errors that can be raised by a TelemetryCapture object"""
+        
+        PortChangeError = "Port cannot be changed while telemetry is being captured"
+        CaptureFailed = "Telemetry capture has failed"
+        BadPacketReceived = "Packet could not be processed"
 
     
     class Signals(QObject):
         collected = pyqtSignal(ForzaDataPacket)  # Emitted on collection of a forza data packet
-        errorOccurred = pyqtSignal(TelemetryCaptureError)
+        errorOccurred = pyqtSignal(object)  # Emits a TelemetryCapture.Error object
         activeChanged = pyqtSignal(bool)
         statusChanged = pyqtSignal(object)
         portChanged = pyqtSignal(int)
@@ -120,7 +120,7 @@ class TelemetryCapture(QObject):
         """Start recording telemetry"""
         
         if self._port is None or self._active:
-            self.signals.errorOccurred.emit(TelemetryCaptureError.CaptureFailed)
+            self.signals.errorOccurred.emit(self.Error.CaptureFailed)
             return
 
         self._setStatus(self.Status.Listening)
@@ -160,7 +160,7 @@ class TelemetryCapture(QObject):
         except:
             # If it's not a forza packet
             self._setStatus(self.Status.Listening)
-            self.signals.errorOccurred.emit(TelemetryCaptureError.BadPacketReceived)
+            self.signals.errorOccurred.emit(self.Error.BadPacketReceived)
             self._invalidPacketsCollected += 1
 
         if self._packetsCollected % 60 == 0:
@@ -181,7 +181,7 @@ class TelemetryCapture(QObject):
     def setPort(self, port: int):
         """Sets the port to listen to. If the object is currently capturing telemetry, the port will not change and an error will occur."""
         if self._active:
-            self.signals.errorOccurred.emit(TelemetryCaptureError.PortChangeError)
+            self.signals.errorOccurred.emit(self.Error.PortChangeError)
         else:
             self._port = port
             self.signals.portChanged.emit(port)

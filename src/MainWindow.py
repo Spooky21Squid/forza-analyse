@@ -243,7 +243,10 @@ class FootageCapture(QObject):
 
 
 class TelemetryCapture(QObject):
-    """A class to manage the recording and capture of Forza telemetry"""
+    """Captures Forza telemetry packets. This class manages a UDPWorker and tries to transform any collected packets into
+    ForzaDataPacket objects. When a valid packet is collected a signal is emitted containing that ForzaDataPacket object
+    regardless of the race status. This class also maintains a status about the packets' validity, and a status about
+    the underlying socket."""
 
     class Status(Enum):
         NotListening = auto()  # No socket set up
@@ -343,9 +346,14 @@ class TelemetryCapture(QObject):
             self._worker.finish()
     
     def setPort(self, port: int):
-        """Sets the port to listen to. If the object is currently capturing telemetry, the port will not change and an error will occur."""
+        """Sets the port to listen to. If the object is currently active and listening for packets, listening will be temporarily stopped
+        while the port is changed, and resumed using the new port."""
         if self._active:
-            self.signals.errorOccurred.emit(self.Error.PortChangeError)
+            self.stop()
+            self._port = port
+            self.signals.portChanged.emit(port)
+            self.start()
+            #self.signals.errorOccurred.emit(self.Error.PortChangeError)
         else:
             self._port = port
             self.signals.portChanged.emit(port)

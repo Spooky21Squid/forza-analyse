@@ -183,14 +183,16 @@ class FootageCapture(QObject):
         trackDirectory.mkdir(parents=True, exist_ok=True)  # Ensure the track directory is created
         outputFile = trackDirectory / pathlib.Path(filename)
         outputFile.resolve()
-        self._recorder.setOutputLocation(QUrl.fromLocalFile(str(self._outputDirectory / pathlib.Path(filename))))
+        self._recorder.setOutputLocation(QUrl.fromLocalFile(str(outputFile)))
         self._setActive(True)
         self._recorder.record()
+        logging.info("FootageCapture started recording")
     
     def stop(self):
         """Stops recording footage"""
         self._setActive(False)
         self._recorder.stop()
+        logging.info("FootageCapture stopped recording")
 
     def getSourceType(self):
         """Returns the current source type"""
@@ -754,6 +756,27 @@ class CaptureManager(QObject):
         self._telemetryManager: TelemetryManager | None = None
         self._footageCapture: FootageCapture | None = None
         self._started: bool = False
+    
+    def getFootageCapture(self) -> FootageCapture | None:
+        """Returns the current FootageCapture object, or none if it isn't set"""
+        return self._footageCapture
+    
+    def setFootageCapture(self, footageCapture: FootageCapture):
+        """Adds a new FootageCapture object to the CaptureManager. This does not stop any recording of telemetry or
+        footage, so make sure these are stopped or able to be stopped before setting a new TelemetryManager"""
+
+        # Unlink the old footage capture
+        if self._telemetryManager is not None and self._footageCapture is not None:
+            self._telemetryManager.signals.startedRecording.disconnect(self._footageCapture.start)
+            self._telemetryManager.signals.stoppedRecording.disconnect(self._footageCapture.stop)
+
+        # Link the new
+        if self._telemetryManager is not None:
+            self._telemetryManager.signals.startedRecording.connect(footageCapture.start)
+            self._telemetryManager.signals.stoppedRecording.connect(footageCapture.stop)
+
+        # Add the new manager
+        self._footageCapture = footageCapture
 
     def setTelemetryManager(self, telemetryManager: TelemetryManager):
         """Adds a new TelemetryManager object to the CaptureManager. This does not stop any recording of telemetry or
@@ -781,9 +804,6 @@ class CaptureManager(QObject):
         logging.info("CaptureManager started saving")
         if self._telemetryManager is not None:
             self._telemetryManager.startSaving()
-        
-        if self._footageCapture is not None:
-            self._footageCapture.start()
     
     def stopSaving(self):
         """Tells the CaptureManager to stop saving telemetry and recording footage"""
@@ -957,6 +977,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telemetryManager.setTelemetryCapture(self.telemetryCapture)
         self.telemetryManager.setTelemetryPersistence(self.telemetryPersistence)
         self.captureManager.setTelemetryManager(self.telemetryManager)
+        self.captureManager.setFootageCapture(self.footageCapture)
         
         # Add the Toolbar and Actions --------------------------
 

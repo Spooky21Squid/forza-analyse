@@ -166,13 +166,22 @@ class FootageCapture(QObject):
             self._active = active
             self.signals.activeChanged.emit(active)
 
-    def start(self):
-        """Starts capturing and recording footage"""
-        dt = datetime.datetime.now()
+    def start(self, trackOrdinal: int, dt: datetime.datetime):
+        """
+        Starts capturing and recording footage.
+
+        Parameters
+        ----------
+        trackOrdinal : The unique ID of a track. Determines the directory that a footage file should be saved to (eg. the player is
+        recording Brands Hatch with track ordinal 860, so the footage is saved under the /860/ directory)
+        dt : The date and time of the start of the recording. Determines the name of the footage file
+        """
         extension = ".mp4"
         prefix = "Forza-Session_"
         filename = prefix + dt.strftime("%Y-%m-%d_%H-%M-%S") + extension
-        outputFile = self._outputDirectory / pathlib.Path(filename)
+        trackDirectory = self._outputDirectory / pathlib.Path(str(trackOrdinal))
+        trackDirectory.mkdir(parents=True, exist_ok=True)  # Ensure the track directory is created
+        outputFile = trackDirectory / pathlib.Path(filename)
         outputFile.resolve()
         self._recorder.setOutputLocation(QUrl.fromLocalFile(str(self._outputDirectory / pathlib.Path(filename))))
         self._setActive(True)
@@ -439,7 +448,9 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
                 filename += ".tsv"
             filename = "Forza-Session_" + filename
             trackOrdinal = str(fdp.track_ordinal)
-            path = self._path / pathlib.Path(trackOrdinal) / pathlib.Path(filename)
+            directory = self._path / pathlib.Path(trackOrdinal)
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / pathlib.Path(filename)
 
             # Prepare the file
             try:
@@ -528,7 +539,7 @@ class TelemetryCapture(QObject):
         self._endTime: datetime.datetime = None  # The date and time that the object stopped recording
 
     def start(self):
-        """Start recording telemetry"""
+        """Start capturing telemetry"""
         
         if self._port is None or self._active:
             self.signals.errorOccurred.emit(self.Error.CaptureFailed)
@@ -652,9 +663,10 @@ class TelemetryManager(QObject):
     class Signals(QObject):
         """All the signals produced by the TelemetryManager class"""
 
-        # Telemetry is being captured AND has started recording to a file. Signal is emitted with a track ordinal, a car ordinal,
-        # and the date and time that the first saved packet was collected
-        startedRecording = pyqtSignal(int, int, datetime.datetime)
+        # Telemetry is being captured AND has started recording to a file. Signal is emitted with a track ordinal
+        # and the date and time that the first saved packet was collected, so a footage recorder knows which track directory
+        # to save footage to and the datetime to use to name the footage file
+        startedRecording = pyqtSignal(int, datetime.datetime)
 
         # Telemetry has stopped being recorded to a file. Telemetry may still be captured from a socket
         stoppedRecording = pyqtSignal()
@@ -676,7 +688,6 @@ class TelemetryManager(QObject):
         if self._telemetryPersistence is not None:
             self._telemetryCapture.signals.collected.disconnect(self._telemetryPersistence.savePacket)
             telemetryCapture.signals.collected.connect(self._telemetryPersistence.savePacket)
-        telemetryCapture.signals.errorOccurred.connect(self._onTelemetryCaptureError)
 
         # Add the new capture object
         self._telemetryCapture = telemetryCapture
@@ -688,9 +699,15 @@ class TelemetryManager(QObject):
     def setTelemetryPersistence(self, telemetryPersistence: TelemetryPersistence):
         """Adds a new TelemetryPersistence object to the TelemetryManager"""
         # Unlink the old telemetry persistence object's signals and slots and link the new
+        if self._telemetryPersistence is not None:
+            if self._telemetryCapture is not None:
+                self._telemetryCapture.signals.collected.disconnect(self._telemetryPersistence.savePacket)
+            self._telemetryPersistence.signals.activeChanged.disconnect(self._onTelemetryPersistenceActiveChanged)
+            self._telemetryPersistence.signals.firstPacketSaved.disconnect(self._onTelemetryPersistenceFirstPacket)
+
         if self._telemetryCapture is not None:
-            self._telemetryCapture.signals.collected.disconnect(self._telemetryPersistence.savePacket)
             self._telemetryCapture.signals.collected.connect(telemetryPersistence.savePacket)
+
         telemetryPersistence.signals.activeChanged.connect(self._onTelemetryPersistenceActiveChanged)
         telemetryPersistence.signals.firstPacketSaved.connect(self._onTelemetryPersistenceFirstPacket)
 
@@ -707,9 +724,20 @@ class TelemetryManager(QObject):
             self.signals.stoppedRecording.emit()
     
     def _onTelemetryPersistenceFirstPacket(self, trackOrdinal: int, carOrdinal: int, dt: datetime.datetime):
-        self.signals.startedRecording.emit(trackOrdinal, carOrdinal, dt)
+        self.signals.startedRecording.emit(trackOrdinal, dt)
 
+    def startSaving(self):
+        """Tells the telemetry persistence object to start saving packets if one exists"""
+        # Make sure telemetry is being captured before trying to save
+        if self._telemetryCapture is not None:
+            self._telemetryCapture.start()
+        if self._telemetryPersistence is not None:
+            self._telemetryPersistence.start()
     
+    def stopSaving(self):
+        """Tells the telemetry persistence object to stop saving packets if one exists"""
+        if self._telemetryPersistence is not None:
+            self._telemetryPersistence.stop()
 
 
 class CaptureManager(QObject):
@@ -719,19 +747,52 @@ class CaptureManager(QObject):
         super().__init__(parent)
         self._telemetryManager: TelemetryManager | None = None
         self._footageCapture: FootageCapture | None = None
+        self._started: bool = False
 
     def setTelemetryManager(self, telemetryManager: TelemetryManager):
-        """Adds a new TelemetryManager object to the CaptureManager"""
-        # Unlink the old telemetry manager object's signals and slots
+        """Adds a new TelemetryManager object to the CaptureManager. This does not stop any recording of telemetry or
+        footage, so make sure these are stopped or able to be stopped before setting a new TelemetryManager"""
+
+        # Unlink the old telemetry manager
+        if self._telemetryManager is not None and self._footageCapture is not None:
+            telemetryManager.signals.startedRecording.disconnect(self._footageCapture.start)
+            telemetryManager.signals.stoppedRecording.disconnect(self._footageCapture.stop)
+
+        # Link the new manager
+        if self._footageCapture is not None:
+            telemetryManager.signals.startedRecording.connect(self._footageCapture.start)
+            telemetryManager.signals.stoppedRecording.connect(self._footageCapture.stop)
 
         # Add the new manager
         self._telemetryManager = telemetryManager
-
-        # Link the new manager
     
     def getTelemetryManager(self) -> TelemetryManager | None:
         """Returns the current TelemetryManager object. Returns None if no manager set"""
         return self._telemetryManager
+
+    def startSaving(self):
+        """Tells the CaptureManager to start saving telemetry packets and recording footage"""
+        if self._telemetryManager is not None:
+            self._telemetryManager.startSaving()
+        
+        if self._footageCapture is not None:
+            self._footageCapture.start()
+    
+    def stopSaving(self):
+        """Tells the CaptureManager to stop saving telemetry and recording footage"""
+        if self._telemetryManager is not None:
+            self._telemetryManager.stopSaving()
+        
+        if self._footageCapture is not None:
+            self._footageCapture.stop()
+
+    def toggleCapture(self):
+        """Toggles between saving and not saving"""
+        if self._started:
+            self.stopSaving()
+        else:
+            self.startSaving()
+        self._started = not self._started
 
 
 class AnalyseModeWidget(QtWidgets.QFrame):
@@ -878,10 +939,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.telemetryCapture.setPort(p)
         self.telemetryCapture.start()
 
+        # Set up the telemetry persistence
+        self.telemetryPersistence = TelemetryDSVFilePersistence()
+        self.telemetryPersistence.setPath(str(saveDirectory))
+
         # Add and configure the Manager objects
         self.captureManager = CaptureManager()
         self.telemetryManager = TelemetryManager()
         self.telemetryManager.setTelemetryCapture(self.telemetryCapture)
+        self.telemetryManager.setTelemetryPersistence(self.telemetryPersistence)
+        self.captureManager.setTelemetryManager(self.telemetryManager)
         
         # Add the Toolbar and Actions --------------------------
 
@@ -899,11 +966,11 @@ class MainWindow(QtWidgets.QMainWindow):
         #configureCaptureAction.triggered.connect(self.captureManager.openConfigureDialog)
         toolbar.addAction(configureCaptureAction)
 
-        # Action to start or stop telemetry and footage capture
+        # Action to start or stop telemetry and footage recording (Actually saving to files, not just capturing packets)
         toggleCaptureAction = QAction(QIcon(str(parentDir / pathlib.Path("assets/icons/control-record.png"))), "Capture", self)
         toggleCaptureAction.setStatusTip("Start/Stop Capture: Start/Stop capturing race footage and telemetry data.")
         toggleCaptureAction.setCheckable(True)
-        #toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
+        toggleCaptureAction.triggered.connect(self.captureManager.toggleCapture)
         toolbar.addAction(toggleCaptureAction)
 
         toolbar.addSeparator()

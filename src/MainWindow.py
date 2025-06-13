@@ -409,6 +409,7 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
 
         self._firstPacketReceived = False
         self._setActive(True)
+        logging.info("TelemetryPersistence started")
 
     def stop(self):
         """Stops saving telemetry and closes the file"""
@@ -419,6 +420,7 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
         self._setActive(False)
         if self._file is not None:
             self._file.close()
+        logging.info("TelemetryPersistence stopped")
     
     def savePacket(self, fdp: ForzaDataPacket):
         """Receives a single Forza Data Packet and decides how or if it should be saved, and saves it."""
@@ -432,6 +434,7 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
 
         # If the car ordinal or track ordinal is different, player has started a new session, so stop saving packets and restart
         if self._firstPacketReceived and (fdp.track_ordinal != self._currentTrackOrdinal or fdp.car_ordinal != self._currentCarOrdinal):
+            logging.info("TelemetryPersistence: Car/Track change detected")
             self.stop()
             self.start()
             return
@@ -476,6 +479,7 @@ class TelemetryDSVFilePersistence(TelemetryPersistence):
             # Set the current track and car ordinals
             self._currentTrackOrdinal = fdp.track_ordinal
             self._currentCarOrdinal = fdp.car_ordinal
+            logging.info("TelemetryPersistence: First packet saved")
 
         # Now can save the packet
 
@@ -728,6 +732,7 @@ class TelemetryManager(QObject):
 
     def startSaving(self):
         """Tells the telemetry persistence object to start saving packets if one exists"""
+        logging.info("TelemetryManager started saving")
         # Make sure telemetry is being captured before trying to save
         if self._telemetryCapture is not None:
             self._telemetryCapture.start()
@@ -736,6 +741,7 @@ class TelemetryManager(QObject):
     
     def stopSaving(self):
         """Tells the telemetry persistence object to stop saving packets if one exists"""
+        logging.info("TelemetryManager stopped saving")
         if self._telemetryPersistence is not None:
             self._telemetryPersistence.stop()
 
@@ -772,6 +778,7 @@ class CaptureManager(QObject):
 
     def startSaving(self):
         """Tells the CaptureManager to start saving telemetry packets and recording footage"""
+        logging.info("CaptureManager started saving")
         if self._telemetryManager is not None:
             self._telemetryManager.startSaving()
         
@@ -780,6 +787,7 @@ class CaptureManager(QObject):
     
     def stopSaving(self):
         """Tells the CaptureManager to stop saving telemetry and recording footage"""
+        logging.info("CaptureManager stopped saving")
         if self._telemetryManager is not None:
             self._telemetryManager.stopSaving()
         
